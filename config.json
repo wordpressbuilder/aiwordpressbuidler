@@ -1,0 +1,32 @@
+{
+  "_comment": "Yahan apni client ki info bharein — GitHub Actions is file ko padhega",
+
+  "language":        "no",
+  "image_model":     "1",
+  "logo_model":      "1",
+
+  "business_name":   "Awais AC Repair Dubai",
+  "industry":        "AC Repair",
+  "country":         "UAE",
+  "state":           "Dubai",
+  "city":            "Dubai",
+  "phone":           "+971501234567",
+  "domain":          "awaisacrepair.com",
+
+  "facebook":        "#",
+  "twitter":         "#",
+  "instagram":       "#",
+  "linkedin":        "#",
+  "youtube":         "#",
+  "map_embed":       "",
+
+  "mode":            "1",
+  "backlinks":       "no",
+  "internal_links":  "yes",
+  "hub_target_url":  "/services/",
+
+  "main_service":    "AC Repair Dubai",
+  "sub_services":    "AC Installation Dubai, AC Cleaning Dubai, AC Gas Refill, Duct Cleaning Dubai, AC Maintenance, Split AC Repair",
+
+  "services_mode3":  "AC Repair, AC Installation, AC Cleaning, AC Gas Refill, Duct Cleaning, AC Maintenance, Split AC Repair, Central AC Repair, Chiller Repair, Window AC Repair"
+}
