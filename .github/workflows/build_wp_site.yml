@@ -1,0 +1,161 @@
+name: Generate WordPress Website
+
+on:
+  workflow_dispatch:
+    inputs:
+      business_name:
+        default: ''
+      industry:
+        default: ''
+      city:
+        default: ''
+      country:
+        default: 'UAE'
+      phone:
+        default: ''
+      wordpress_url:
+        description: 'WP site URL e.g. https://client-site.com/'
+        default: ''
+      wordpress_user:
+        description: 'WP username (App Password GitHub Secret me hai)'
+        default: 'admin'
+      mode:
+        description: '1=Content Injector | 2=Hub Mode | 3=Full Website'
+        default: '3'
+      language:
+        description: 'en / ar / es / fr / de'
+        default: 'en'
+      target_page_id:
+        description: 'Mode 1 only — existing WP Page ID'
+        default: ''
+      hub_page_id:
+        description: 'Mode 2 only — parent WP Page ID'
+        default: ''
+      main_service:
+        default: ''
+      sub_services:
+        default: ''
+      services_mode3:
+        default: ''
+      image_model:
+        description: '1=Hybrid | 2=All OpenAI | 3=All Replicate'
+        default: '1'
+      backlinks:
+        default: 'no'
+      internal_links:
+        default: 'yes'
+      facebook:
+        default: '#'
+      instagram:
+        default: '#'
+      twitter:
+        default: '#'
+      linkedin:
+        default: '#'
+      youtube:
+        default: '#'
+
+jobs:
+  build-wp-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Cache pip
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+
+    - name: Build config.json from form inputs
+      env:
+        IN_BUSINESS_NAME:  ${{ github.event.inputs.business_name }}
+        IN_INDUSTRY:       ${{ github.event.inputs.industry }}
+        IN_CITY:           ${{ github.event.inputs.city }}
+        IN_COUNTRY:        ${{ github.event.inputs.country }}
+        IN_PHONE:          ${{ github.event.inputs.phone }}
+        IN_WP_URL:         ${{ github.event.inputs.wordpress_url }}
+        IN_WP_USER:        ${{ github.event.inputs.wordpress_user }}
+        IN_MODE:           ${{ github.event.inputs.mode }}
+        IN_LANGUAGE:       ${{ github.event.inputs.language }}
+        IN_TARGET_PAGE:    ${{ github.event.inputs.target_page_id }}
+        IN_HUB_PAGE:       ${{ github.event.inputs.hub_page_id }}
+        IN_MAIN_SERVICE:   ${{ github.event.inputs.main_service }}
+        IN_SUB_SERVICES:   ${{ github.event.inputs.sub_services }}
+        IN_SERVICES_MODE3: ${{ github.event.inputs.services_mode3 }}
+        IN_IMAGE_MODEL:    ${{ github.event.inputs.image_model }}
+        IN_BACKLINKS:      ${{ github.event.inputs.backlinks }}
+        IN_INTERNAL_LINKS: ${{ github.event.inputs.internal_links }}
+        IN_FACEBOOK:       ${{ github.event.inputs.facebook }}
+        IN_INSTAGRAM:      ${{ github.event.inputs.instagram }}
+        IN_TWITTER:        ${{ github.event.inputs.twitter }}
+        IN_LINKEDIN:       ${{ github.event.inputs.linkedin }}
+        IN_YOUTUBE:        ${{ github.event.inputs.youtube }}
+      run: |
+        python3 - <<'PYEOF'
+        import json, os
+
+        g = lambda k, d='': (os.environ.get(k) or d).strip() or d
+
+        cfg = {
+          "business_name":  g('IN_BUSINESS_NAME'),
+          "industry":       g('IN_INDUSTRY'),
+          "city":           g('IN_CITY'),
+          "country":        g('IN_COUNTRY', 'UAE'),
+          "phone":          g('IN_PHONE'),
+          "wordpress_url":  g('IN_WP_URL'),
+          "wordpress_user": g('IN_WP_USER', 'admin'),
+          "mode":           g('IN_MODE', '3'),
+          "language":       g('IN_LANGUAGE', 'en'),
+          "target_page_id": g('IN_TARGET_PAGE'),
+          "hub_page_id":    g('IN_HUB_PAGE'),
+          "main_service":   g('IN_MAIN_SERVICE'),
+          "sub_services":   g('IN_SUB_SERVICES'),
+          "services_mode3": g('IN_SERVICES_MODE3'),
+          "image_model":    g('IN_IMAGE_MODEL', '1'),
+          "backlinks":      g('IN_BACKLINKS', 'no'),
+          "internal_links": g('IN_INTERNAL_LINKS', 'yes'),
+          "facebook":       g('IN_FACEBOOK', '#'),
+          "instagram":      g('IN_INSTAGRAM', '#'),
+          "twitter":        g('IN_TWITTER', '#'),
+          "linkedin":       g('IN_LINKEDIN', '#'),
+          "youtube":        g('IN_YOUTUBE', '#')
+        }
+
+        with open("config.json", "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+        print(f"✅ Config: {cfg['business_name']} | {cfg['city']} | Mode {cfg['mode']} | Lang {cfg['language']}")
+        print(f"   WP Target: {cfg['wordpress_url']}")
+        PYEOF
+
+    - name: Run WordPress generator
+      env:
+        OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
+        REPLICATE_API_TOKEN:    ${{ secrets.REPLICATE_API_TOKEN }}
+        CLOUDINARY_CLOUD_NAME:  ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+        CLOUDINARY_API_KEY:     ${{ secrets.CLOUDINARY_API_KEY }}
+        CLOUDINARY_API_SECRET:  ${{ secrets.CLOUDINARY_API_SECRET }}
+        DEVTO_API_KEY:          ${{ secrets.DEVTO_API_KEY }}
+        WP_APP_PASSWORD:        ${{ secrets.WP_APP_PASSWORD }}
+      run: python main.py
+
+    - name: Summary
+      if: always()
+      run: |
+        echo "=== WordPress publish run complete ==="
+        echo "Check WP Admin → Pages for published content"
+        echo "Mega Menu / Footer / CSS draft pages bhi check karein"
