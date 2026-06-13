@@ -132,42 +132,72 @@ def get_language_direction(lang_code):
     return 'ltr'
 
 def extract_keyword_tiers(b_data, service_name, industry, location, target_lang="en"):
-    """Extract 3 tiers of keywords: High-Intent, Semantic, Local/Time-Based"""
+    """3-tier SEO keywords — Claude-powered (real search-intent), OpenAI fallback. Cached per service."""
     cache_key = f"keyword_tiers_{service_name}_{industry}_{location}_{target_lang}"
     if cache_key in Config.ENTITY_CACHE:
         return Config.ENTITY_CACHE[cache_key]
-    
+
     current_year = datetime.now().year
-    
     fallback = {
-        "high_intent": [f"hire {service_name} in {location}", f"affordable {service_name}", f"best {service_name} near me"],
-        "semantic": [f"{service_name} techniques", f"professional {service_name} solutions", f"expert {service_name} advice"],
-        "local_time": [f"{service_name} {location} {current_year}", f"emergency {service_name} 24/7", f"top rated {service_name}"]
+        "high_intent": [f"{service_name} {location}".lower(), f"best {service_name} {location}".lower(),
+                        f"emergency {service_name} near me".lower()],
+        "semantic": [f"{service_name} cost", f"professional {service_name} service",
+                     f"{service_name} maintenance"],
+        "local_time": [f"{service_name} {location} {current_year}".lower(),
+                       f"24/7 {service_name} {location}".lower()]
     }
-    
-    if not CLIENTS['openai']: return fallback
-    
+
+    lang_names = {"en": "English", "ar": "Arabic", "es": "Spanish", "fr": "French", "de": "German"}
+    lang_name = lang_names.get(target_lang, "English") + (" (native script)" if target_lang == 'ar' else "")
+    prompt = f"""You are a local-SEO keyword strategist for service businesses.
+Generate the exact keyword tiers a top agency would target for ONE page.
+
+SERVICE: {service_name}
+INDUSTRY: {industry}
+LOCATION: {location}
+LANGUAGE: {lang_name} — every keyword in this language
+YEAR: {current_year}
+
+TIERS (5 keywords each):
+1. "high_intent": money keywords a ready-to-buy customer types into Google.
+   Patterns: "[service] [city]", "best/cheap/emergency/same-day [service] [city]",
+   "[service] near me". Lowercase, exactly how people type.
+2. "semantic": LSI/topic terms Google associates with this service — real parts,
+   symptoms, sub-jobs, techniques (e.g. for fridge repair: "compressor replacement",
+   "fridge not cooling", "gas refilling"). NOT generic words like "techniques".
+3. "local_time": geo + time modifiers — "[service] [city] {current_year}",
+   "24/7 [service] [city]", "[service] open now", weekend/holiday variants.
+
+HARD RULES:
+- Every keyword unique, max 6 words, no brand names, no quotes inside keywords.
+- Only phrases a real human would type into Google. If it sounds like AI filler, drop it.
+
+Return ONLY JSON:
+{{"high_intent": ["..."], "semantic": ["..."], "local_time": ["..."]}}"""
+
+    # 1st choice: Claude (best intent understanding)
     try:
-        prompt = f"""
-        Generate 3 tiers of SEO keywords for: "{service_name}"
-        Industry: {industry} | Location: {location} | Year: {current_year}
-        
-        Return EXACT JSON:
-        {{
-            "high_intent": ["kw1", "kw2", "kw3", "kw4", "kw5"],
-            "semantic": ["kw1", "kw2", "kw3", "kw4", "kw5"],
-            "local_time": ["kw1", "kw2", "kw3", "kw4", "kw5"]
-        }}
-        """
-        response = CLIENTS['openai'].chat.completions.create(
-            model=Config.MODEL_HIGH_TIER, messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"}, temperature=0.5
-        )
-        content = clean_json_response(response.choices[0].message.content)
-        if content and 'high_intent' in content:
+        content = call_claude_json(prompt, "You are an SEO keyword strategist. Output only valid JSON.")
+        if content and content.get('high_intent'):
             Config.ENTITY_CACHE[cache_key] = content
             return content
-    except Exception: pass
-    
+    except Exception:
+        pass
+
+    # 2nd choice: OpenAI fallback
+    if CLIENTS.get('openai'):
+        try:
+            response = CLIENTS['openai'].chat.completions.create(
+                model=Config.MODEL_HIGH_TIER,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}, temperature=0.5)
+            content = clean_json_response(response.choices[0].message.content)
+            if content and content.get('high_intent'):
+                Config.ENTITY_CACHE[cache_key] = content
+                return content
+        except Exception:
+            pass
+
     Config.ENTITY_CACHE[cache_key] = fallback
     return fallback
 
@@ -844,7 +874,11 @@ def get_hosted_image(prompt_text, context_mode="hero", industry="General", is_ca
     if is_category and cache_key_base in CATEGORY_IMAGE_CACHE:
         return CATEGORY_IMAGE_CACHE[cache_key_base]
 
-    use_gpt = (Config.IMAGE_MODEL in ["gpt", "openai", "hybrid"])
+    use_gpt = (
+        Config.IMAGE_MODEL == "gpt"
+        or Config.IMAGE_MODEL == "openai"
+        or (Config.IMAGE_MODEL == "hybrid" and Config.PHOTO_MODEL == "openai")
+    )
     
     # 1. Get Context & SEO Keywords
     context = detect_business_context(industry, service_clean, context_mode) 
@@ -878,7 +912,7 @@ def get_hosted_image(prompt_text, context_mode="hero", industry="General", is_ca
         try:
             # ---------- OPENAI GPT-IMAGE-2 ----------
             if use_gpt and CLIENTS.get('openai'):
-                size = "1792x1024" if context_mode == "hero" else "1024x1024"
+                size = "1536x1024" if context_mode == "hero" else "1024x1024"
                 response = CLIENTS['openai'].images.generate(
                     model="gpt-image-1",
                     prompt=full_prompt,
@@ -1237,13 +1271,13 @@ class UniversalHeader:
         
         if is_font_awesome:
             logo_content = f'<i class="{logo_url}" style="font-size:32px; color:#{accent_color};"></i>'
-            logo_text = f'<span style="font-family:Outfit,sans-serif; font-size:1.3rem; font-weight:700; color:#{primary_color};">{b_data.get("name", "")}</span>'
+            logo_text = f'<span style="font-family:Outfit,sans-serif; font-size:1.3rem; font-weight:700; color:#{primary_color}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px;">{b_data.get("name", "")}</span>'
         elif logo_url:
             logo_content = f'<img src="{logo_url}" alt="{b_data.get("name", "")} Logo" style="max-width:180px; max-height:60px;">'
             logo_text = ""
         else:
             logo_content = ""
-            logo_text = f'<span style="font-family:Outfit,sans-serif; font-size:1.3rem; font-weight:700; color:#{primary_color};">{b_data.get("name", "")}</span>'
+            logo_text = f'<span style="font-family:Outfit,sans-serif; font-size:1.3rem; font-weight:700; color:#{primary_color}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px;">{b_data.get("name", "")}</span>'
         
         # Desktop menu
         desktop_items = UniversalHeader.generate_desktop_menu_items(b_data, structure, mode, hub_target_url)
@@ -1360,14 +1394,14 @@ class UniversalHeader:
         </div>
     </div>
     <div style="background:white; box-shadow:0 2px 10px rgba(0,0,0,0.08);">
-        <div style="max-width:1200px; margin:0 auto; padding:10px 20px; display:flex; justify-content:space-between; align-items:center; gap:16px;">
-            <a href="#top" style="display:flex; align-items:center; gap:10px; text-decoration:none; flex-shrink:0;">
+        <div style="max-width:1200px; margin:0 auto; padding:10px 20px; display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:nowrap;">
+            <a href="#top" style="display:flex; align-items:center; gap:10px; text-decoration:none; flex-shrink:0; min-width:0; overflow:hidden;">
                 {logo_content}
                 {logo_text}
             </a>
-            <nav class="m1-desktop-nav" style="display:flex; align-items:center; gap:4px;">
+            <nav class="m1-desktop-nav" style="display:flex; align-items:center; gap:4px; flex-wrap:nowrap; overflow:hidden; flex-shrink:1; min-width:0;">
                 {desktop_nav}
-                <a href="#contact" style="margin-left:10px; display:inline-flex; align-items:center; gap:7px; background:linear-gradient(135deg, #{_ac} 0%, #{_pc} 100%); color:white; padding:11px 24px; border-radius:50px; font-weight:700; text-decoration:none; font-size:0.9rem; box-shadow:0 4px 12px rgba(0,0,0,0.2);">
+                <a href="#contact" style="margin-left:10px; flex-shrink:0; white-space:nowrap; display:inline-flex; align-items:center; gap:7px; background:linear-gradient(135deg, #{_ac} 0%, #{_pc} 100%); color:white; padding:11px 24px; border-radius:50px; font-weight:700; text-decoration:none; font-size:0.9rem; box-shadow:0 4px 12px rgba(0,0,0,0.2);">
                     <i class="fas fa-file-invoice-dollar"></i> {ui.get('get_quote', 'Get Quote')}
                 </a>
             </nav>
@@ -1400,7 +1434,7 @@ class UniversalHeader:
 </div>
 <style>
 html {{ scroll-behavior: smooth; }}
-@media (max-width:991px) {{
+@media (max-width:1280px) {{
     #{root_id}-funnel .m1-desktop-nav {{ display:none !important; }}
     #{root_id}-funnel #{root_id}-m1-toggle {{ display:block !important; }}
 }}
@@ -3287,12 +3321,19 @@ def generate_sub_services(b_data, main_service):
                 f"Analytics & {main_service} Reporting", f"{main_service} Audit & Optimization",
                 f"Advanced {main_service} Techniques", f"{main_service} ROI Maximization"]
     
+    target_lang = b_data.get('target_lang', 'en')
+    lang_names = {"en": "English", "ar": "Arabic", "es": "Spanish", "fr": "French", "de": "German"}
+    full_lang_name = lang_names.get(target_lang, "English")
+
     try:
         prompt = f"""
         Generate 6 SPECIFIC, REALISTIC sub-services for: "{main_service}"
         Industry: {b_data.get('industry')}
         Location: {b_data.get('city', b_data.get('country'))}
-        
+
+        CRITICAL LANGUAGE RULE: Every sub-service name MUST be written natively in {full_lang_name}.
+        Do NOT return English if {full_lang_name} is different.
+
         Return JSON: {{"sub_services": ["service1", "service2", ...]}}
         """
         
@@ -3309,6 +3350,8 @@ def generate_sub_services(b_data, main_service):
     except Exception as e:
         print(f"   ⚠️ Sub-service generation error: {e}")
     
+    if target_lang == 'ar':
+        return [f"خدمة {main_service} المتخصصة {i+1}" for i in range(6)]
     return [f"Professional {main_service} - Service {i+1}" for i in range(6)]
 
 @retry_operation(max_retries=3)
@@ -3347,6 +3390,10 @@ def generate_service_faqs(b_data, service_name, category):
     lsi_terms = entities.get('related_terms', [])[:3]
     
     lsi_instruction = f"TRADITIONAL SEO RULE: You MUST naturally weave these exact long-tail phrases into the Questions or Answers: {', '.join(lsi_terms)}" if lsi_terms else ""
+
+    # Niche-specific tone (medical = reassuring, trades = practical, etc.)
+    _niche = b_data.get('niche_engine')
+    tone_instruction = _niche.get_faq_tone_instruction() if _niche and hasattr(_niche, 'get_faq_tone_instruction') else "Be professional and clear."
     
     # 2. THE HYBRID AEO/SEO PROMPT
     prompt = f"""
@@ -3360,6 +3407,8 @@ def generate_service_faqs(b_data, service_name, category):
     2. BE OBJECTIVE & FACTUAL: Answers MUST be direct and factual. Absolutely NO marketing fluff (Do not say "Call our amazing team today!"). 
     3. GIVE ESTIMATES: Include realistic, estimated cost ranges or precise timeframes (e.g., "typically takes 2-4 hours", or "costs vary based on X and Y, usually starting around...").
     
+    TONE INSTRUCTION: {tone_instruction}
+    
     {lsi_instruction}
     
     RETURN JSON FORMAT ONLY: {{"faqs": [{{"q": "Question 1", "a": "Answer 1"}}, ...]}}
@@ -3367,17 +3416,18 @@ def generate_service_faqs(b_data, service_name, category):
     
     try:
         print(f"   🧠 Generating AEO-Optimized FAQs for {clean_srv[:20]}...")
-        # Using the High-Tier model (gpt-5.5) because AEO requires strict logical compliance
-        response = CLIENTS['openai'].chat.completions.create(
-            model=Config.MODEL_HIGH_TIER,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.6, # Lowered slightly for more factual, less creative output
-            max_tokens=800
-        )
-        content = clean_json_response(response.choices[0].message.content)
+        # Claude-first (best AEO logic), OpenAI fallback
+        content = call_claude_json(prompt)
+        if not content and CLIENTS.get('openai'):
+            response = CLIENTS['openai'].chat.completions.create(
+                model=Config.MODEL_HIGH_TIER,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.6,
+                max_tokens=800
+            )
+            content = clean_json_response(response.choices[0].message.content)
         if content and 'faqs' in content and len(content['faqs']) >= 3:
-            # Force exactly 5 if it generated more
             final_faqs = content['faqs'][:5]
             SERVICE_FAQS_CACHE[cache_key] = final_faqs
             return final_faqs
@@ -3434,35 +3484,46 @@ def generate_zigzag_content_with_links(b_data, service_name, category, is_child_
             link_instruction = "3. CRITICAL: DO NOT include any HTML links (<a> tags) or URLs in the description."
         
         prompt = f"""
-        Create UNIQUE zigzag section content for: {clean_title(service_name)}
-        CONTEXT: {b_data.get('industry')} business in {location}, {category} category.
+        You are an elite conversion copywriter for a {b_data.get('industry')} business in {location}.
+        Write a RICH, DETAILED zigzag section for this specific service: {clean_title(service_name)}
         UNIQUE SEED: {random_seed}
-        
-        REQUIREMENTS:
-        1. MUST be at least 6 sentences of text.
-        2. CRITICAL: The entire output MUST BE WRITTEN IN {full_lang_name}.
-        {link_instruction}
-        4. {sec_kw_instruction}
-        
+        TARGET LANGUAGE: {full_lang_name}
+
+        WRITING RULES:
+        1. LENGTH: Write exactly 3 full paragraphs (minimum 150 words total). Separate paragraphs with <br><br>.
+        2. PARAGRAPH 1: What is this service, who needs it, what problem does it solve in {location}?
+        3. PARAGRAPH 2: How do we do it differently? What technique, tool, or guarantee sets us apart?
+        4. PARAGRAPH 3: What result/benefit/peace of mind does the customer get afterward?
+        5. Use <strong> tags on 2-3 key phrases that show expertise or urgency.
+        6. Start with a DIRECT HOOK — the customer's pain point or a surprising fact. NOT "In today's world" or "Professional services".
+        7. Weave these semantic keywords naturally: {', '.join(secondary_keywords)}
+        8. {("Plain prose only — do NOT include any <a href> links." if not (Config.GENERATE_INTERNAL_LINKS and related_services) else "Weave 2-3 internal links using ONLY the exact URLs provided below; translate the clickable text into native " + full_lang_name + ".")}
+        9. BANNED FILLER (instant rejection): "Our experienced team provides customized solutions", "We use the latest technology", "premium materials for lasting results".
+        10. Include at least ONE specific realistic number: a price range, timeframe, count, or percentage relevant to {location}.
+        11. AUTO-ADAPT tone: medical/dental = reassuring; trades/repair = urgent and practical; beauty/luxury = aspirational; professional services = authoritative. Follow Problem → Agitate → Solution flow.
+        12. ALL text MUST be written natively in {full_lang_name}.
+
         RETURN JSON ONLY:
         {{
-            "title": "Catchy 3-5 word title specific to {clean_title(service_name)} in {full_lang_name}",
-            "description": "Detailed paragraph with at least 6 sentences in {full_lang_name}, secondary keywords."
+            "title": "Catchy 4-6 word title specific to {clean_title(service_name)} in {full_lang_name}",
+            "description": "3 rich paragraphs separated by <br><br> in {full_lang_name}"
         }}
-        
+
         AVAILABLE SERVICES TO LINK TO (USE THESE EXACT URLS FOR THE HREF):
         {url_map_str}
         """
         
         try:
-            response = CLIENTS['openai'].chat.completions.create(
-                model=Config.MODEL_LOW_TIER,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.9
-            )
-            
-            content = clean_json_response(response.choices[0].message.content)
+            # Claude-first (richer copy), OpenAI fallback
+            content = call_claude_json(prompt)
+            if not content:
+                response = CLIENTS['openai'].chat.completions.create(
+                    model=Config.MODEL_LOW_TIER,
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.9
+                )
+                content = clean_json_response(response.choices[0].message.content)
             if content and 'title' in content and 'description' in content:
                 desc = content['description'].strip()
                 
@@ -3664,6 +3725,72 @@ def build_how_it_works_section(b_data):
     </section>'''
 
 
+def generate_page_dna(b_data: dict) -> dict:
+    """One Claude call per site — site-unique section order for home/category/service.
+    Two same-niche sites get different layouts. Safe fallback if Claude fails."""
+    fallback = {
+        "home_section_order":     ["services_grid", "process_steps", "why_choose", "reviews", "areas", "internal_links", "faq"],
+        "category_section_order": ["intro_block", "services_grid", "why_choose", "faq"],
+        "service_section_order":  ["intro_block", "zigzag_siblings", "why_choose", "reviews", "faq"],
+        "intro_style":            "centered",
+        "services_display":       "mixed",
+        "faq_position":           "bottom",
+    }
+    if not CLIENTS.get('claude'):
+        return fallback
+
+    industry   = b_data.get("industry", "business")
+    city       = b_data.get("city") or b_data.get("country", "")
+    site_seed  = b_data.get("site_seed", 0)
+    niche_obj  = b_data.get("niche_engine")
+    niche_label = getattr(niche_obj, "label", "general") if niche_obj else "general"
+
+    prompt = f"""You are a web architect. Design a UNIQUE section order for this site.
+
+BUSINESS: {industry} in {city}
+NICHE: {niche_label}
+UNIQUENESS SEED: {site_seed}
+
+IMPORTANT: Use the seed to vary your choices. Two sites with different seeds
+MUST produce different layouts. Do not always put "why_choose" first.
+
+home_section_order: shuffle these (keep all 7, vary the order):
+["services_grid","process_steps","why_choose","reviews","areas","internal_links","faq"]
+
+category_section_order: choose 4 from:
+["intro_block","services_grid","why_choose","faq","reviews"]
+
+service_section_order: choose 5 from:
+["intro_block","zigzag_siblings","why_choose","reviews","faq","areas"]
+
+intro_style: pick ONE of: centered, left_aligned, split_with_stats
+services_display: pick ONE of: grid, zigzag, mixed
+faq_position: pick ONE of: bottom, after_why_choose
+
+Return ONLY valid JSON, no markdown:
+{{
+    "home_section_order": [...],
+    "category_section_order": [...],
+    "service_section_order": [...],
+    "intro_style": "...",
+    "services_display": "...",
+    "faq_position": "..."
+}}"""
+
+    try:
+        print(f"\n🧬 Generating PAGE_DNA for {industry} (seed: {site_seed})...")
+        result = call_claude_json(prompt)
+        if result and "home_section_order" in result:
+            for k, v in fallback.items():
+                if k not in result:
+                    result[k] = v
+            print(f"   ✅ PAGE_DNA: home starts with [{result['home_section_order'][0]}]")
+            return result
+    except Exception as e:
+        print(f"   ⚠️ PAGE_DNA generation failed: {e}")
+    return fallback
+
+
 def generate_design_spec(b_data):
     """One Claude call that defines hero_title, hero_sub, trust_badge, how_it_works,
     services_intro, why_choose_intro for the whole site. Cached in b_data['design_spec']."""
@@ -3859,99 +3986,69 @@ def generate_page_content(b_data, page_type, active_service_name=None, parent_se
     if not CLIENTS['openai']:
         return defaults
     
+    primary_keyword = (keyword_tiers.get('high_intent') or [clean_service_name])[0]
+
     prompt = f"""
     You are an elite SEO Copywriter and Conversion Rate Optimization (CRO) expert.
-    Your task is to create UNIQUE, highly persuasive {page_type} page content for {clean_service_name} in {location}.
-    
+    Create UNIQUE, highly persuasive {page_type} page content for {clean_service_name} in {location}.
+
     BUSINESS CONTEXT:
     - Industry: {industry}
     - Primary Service: {clean_service_name}
     - Target Location: {location}
     - Target Language: {full_lang_name}
     - Random Seed: {random_seed}
-    
-    CONTENT REQUIREMENTS & LANGUAGE LOCK:
-    1. STRICT LANGUAGE: Every single piece of generated text (except JSON keys and mdi icons) MUST be written natively in {full_lang_name}. Do NOT output English if {full_lang_name} is different.
-    2. UNIQUE COPY: Avoid generic filler. Write compelling, industry-specific copy.
-    3. ICONS: For "icon" fields, use valid Material Design Icons (e.g., "mdi:star", "mdi:shield-check").
-    4. NO HEADER HTML IN INTRO: Do NOT use `#`, `<h1>`, or `<h2>` tags in the `intro` text. Use plain text or basic `<p>` tags only to prevent SEO penalizations.
 
-    CRITICAL SEO KEYWORD INJECTIONS:
-    1. META TITLE & DESC: Create a click-worthy Meta Title (~60 chars) and Meta Description (~150 chars). You MUST naturally embed keywords from this list: [{high_intent_kw}].
-    2. HERO H1: Make the Hero Title highly optimized for SEO. You MUST include {current_year} and exactly one keyword from: [{high_intent_kw}]. NO HTML tags.
-    3. INTRO: Naturally weave in at least 2 keywords from this list: [{semantic_kw}].
-    4. REVIEWS & FAQS: Naturally weave in keywords from this list: [{local_time_kw}]. The reviews must sound like real humans used these search terms. Use culturally accurate names for {location}.
+    LANGUAGE LOCK: Every text value (except JSON keys and mdi icons) MUST be written natively in {full_lang_name}. Output native characters, NOT unicode escapes. Keep JSON keys in English.
+
+    HERO H1 RULES (the `hero_title` is the H1):
+    - 5-8 words MAXIMUM. NO year. NO HTML tags.
+    - Format: "[Action/Benefit] [Specific Service] [City]" — e.g. "Same-Day Fridge Repair Dubai" or "Dubai's Trusted AC Experts".
+    - MUST contain the primary keyword: "{primary_keyword}".
+    - DO NOT just concatenate industry + city. DO NOT use "We provide..." sentence structure. Write a real headline a human would say.
+
+    INTRO RULES:
+    - Maximum 55 words TOTAL, split into exactly 2 short paragraphs separated by <br><br>.
+    - First sentence states what you do and where. Second sentence mentions "{primary_keyword}" naturally.
+    - NO `#`, `<h1>`, `<h2>` tags. NO filler like "In today's competitive world" or "As a leading provider".
+    - Naturally weave in semantic keywords: [{semantic_kw}].
+
+    WHY CHOOSE US RULES (exactly 3 cards):
+    - Each `title` is a 2-3 word UNIQUE benefit — NOT "Expert Team", NOT "Quality Guarantee".
+    - Each `desc` is 40-60 words, SPECIFIC to this {industry} business in {location}, includes ONE concrete number, ZERO generic filler.
+    - `stat` is a short proof point (e.g. "12+ Years", "100%", "60 Min").
+    - `icon` is a valid Material Design Icon (e.g. "mdi:shield-check", "mdi:clock-fast").
+
+    REVIEWS RULES (exactly 3):
+    - Culturally accurate names for {location}. Each review max 25 words, sounds like a real human.
+    - Weave in keywords naturally from: [{local_time_kw}].
+
+    META: Meta Title (~60 chars) + Meta Description (~150 chars) embedding keywords from: [{high_intent_kw}].
+
     RETURN ONLY VALID JSON MATCHING THIS EXACT FORMAT:
     {{
-        "meta_title": "string (Highly professional SEO Title tag in {full_lang_name}, ~60 chars, including keyword, location, and year)",
-        "hero_title": "string (Catchy H1 in {full_lang_name} including {current_year} and a high-intent keyword. NO HTML tags.)",
-        "hero_sub": "string (Compelling H2 in {full_lang_name} focusing on {location} and customer benefits)",
-        "trust_signals": [
-            "string (Short punchy signal 1 in {full_lang_name})", 
-            "string (Signal 2 in {full_lang_name})", 
-            "string (Signal 3 in {full_lang_name})"
-        ],
-        "intro": "string (150-200 words of highly persuasive copy in {full_lang_name}. NO H1/H2 TAGS. Naturally include semantic keywords.)",
-        "process": [
-            "string (Step 1 in {full_lang_name})", 
-            "string (Step 2 in {full_lang_name})", 
-            "string (Step 3 in {full_lang_name})", 
-            "string (Step 4 in {full_lang_name})"
-        ],
+        "meta_title": "string (~60 chars in {full_lang_name}, keyword + location)",
+        "hero_title": "string (5-8 word H1 in {full_lang_name}, contains '{primary_keyword}', NO year, NO HTML)",
+        "hero_sub": "string (Compelling subheadline in {full_lang_name} mentioning {location})",
+        "trust_signals": ["signal 1", "signal 2", "signal 3"],
+        "intro": "string (max 55 words, 2 paragraphs split by <br><br>, includes '{primary_keyword}')",
+        "process": ["Step 1", "Step 2", "Step 3", "Step 4"],
         "why_choose_us": [
-            {{
-                "title": "string (Reason 1 in {full_lang_name})", 
-                "desc": "string (Detailed explanation in {full_lang_name})", 
-                "icon": "string (mdi:icon-name)", 
-                "stat": "string (e.g., '10+ Years', '100%')"
-            }},
-            {{
-                "title": "string (Reason 2 in {full_lang_name})", 
-                "desc": "string (Detailed explanation in {full_lang_name})", 
-                "icon": "string (mdi:icon-name)", 
-                "stat": "string"
-            }},
-            {{
-                "title": "string (Reason 3 in {full_lang_name})", 
-                "desc": "string (Detailed explanation in {full_lang_name})", 
-                "icon": "string (mdi:icon-name)", 
-                "stat": "string"
-            }}
+            {{"title": "2-3 word UNIQUE benefit", "desc": "40-60 words specific to {industry} in {location} with ONE number", "icon": "mdi:icon-name", "stat": "short stat"}},
+            {{"title": "string", "desc": "string", "icon": "mdi:icon-name", "stat": "string"}},
+            {{"title": "string", "desc": "string", "icon": "mdi:icon-name", "stat": "string"}}
         ],
         "reviews": [
-            {{
-                "name": "string (Culturally accurate Localized Name)",
-                "txt": "string (Authentic review in {full_lang_name} including a high-intent keyword)",
-                "rating": "string (5.0 or 4.9)"
-            }},
-            {{
-                "name": "string (Culturally accurate Localized Name)",
-                "txt": "string (Authentic review in {full_lang_name} including a semantic keyword)",
-                "rating": "string"
-            }},
-            {{
-                "name": "string (Culturally accurate Localized Name)",
-                "txt": "string (Authentic review in {full_lang_name} including a local/time keyword)",
-                "rating": "string"
-            }}
+            {{"name": "localized name", "txt": "max 25 words with a high-intent keyword", "rating": "5.0"}},
+            {{"name": "localized name", "txt": "max 25 words with a semantic keyword", "rating": "4.9"}},
+            {{"name": "localized name", "txt": "max 25 words with a local/time keyword", "rating": "5.0"}}
         ],
         "faqs": [
-            {{
-                "q": "string (Common question in {full_lang_name} about {clean_service_name} in {location})",
-                "a": "string (Detailed answer in {full_lang_name} incorporating keywords)"
-            }},
-            {{
-                "q": "string", "a": "string"
-            }},
-            {{
-                "q": "string", "a": "string"
-            }},
-            {{
-                "q": "string", "a": "string"
-            }},
-            {{
-                "q": "string", "a": "string"
-            }}
+            {{"q": "question in {full_lang_name} about {clean_service_name} in {location}", "a": "factual answer in {full_lang_name}"}},
+            {{"q": "string", "a": "string"}},
+            {{"q": "string", "a": "string"}},
+            {{"q": "string", "a": "string"}},
+            {{"q": "string", "a": "string"}}
         ]
     }}
     """
@@ -3970,21 +4067,47 @@ def generate_page_content(b_data, page_type, active_service_name=None, parent_se
             content = clean_json_response(response.choices[0].message.content)
         
         if content:
-            if 'why_choose_us' not in content or len(content['why_choose_us']) == 0:
+            # FORCE-STRIP any year from H1 (AI often ignores negative prompts)
+            if 'hero_title' in content:
+                content['hero_title'] = re.sub(r'\s*\b20\d{2}\b\s*', '', content['hero_title']).strip(' -—|:')
+
+            # Stricter why_choose_us validation — accept AI only if well-formed
+            _wcu = content.get('why_choose_us')
+            if not (isinstance(_wcu, list) and len(_wcu) >= 3 and
+                    all(isinstance(x, dict) and x.get('title') and len(str(x.get('desc', ''))) > 30 for x in _wcu[:3])):
                 content['why_choose_us'] = standard_why_choose_us
+
             if 'faqs' not in content or len(content['faqs']) < 3:
                 content['faqs'] = faqs
             if 'areas_served' not in content:
                 content['areas_served'] = neighborhoods
-            
+
             # 💎 SEO FIX: Use AI-generated Meta Title, fallback to Evergreen if AI fails
             if 'meta_title' not in content or len(content['meta_title']) < 10:
                 content['meta_title'] = evergreen_title
-                
-            # Inject perfectly formatted SEO tags outside of AI generation
             content['meta_description'] = seo_meta_description
             content['meta_keywords'] = all_keywords_str
-            
+
+            # 🌟 NATURAL KEYWORD REWRITE: if intro missed the primary keyword, rewrite with Claude
+            try:
+                _top_kw = keyword_tiers.get('high_intent', [])
+                if content.get('intro') and _top_kw and _top_kw[0].lower() not in content['intro'].lower():
+                    print(f"   🔄 Intro missed primary keyword — rewriting naturally with Claude...")
+                    _rw_prompt = f"""Rewrite this intro so it naturally includes the exact phrase: '{_top_kw[0]}'.
+Do NOT force it with colons. Make it flow in the first or second sentence.
+Keep it SHORT (max 55 words). Language: {full_lang_name}.
+
+Original:
+{content['intro']}
+
+Return ONLY JSON: {{"intro": "rewritten text"}}"""
+                    _rw = call_claude_json(_rw_prompt, "You are an expert SEO editor. Return ONLY JSON.")
+                    if _rw and _rw.get('intro'):
+                        content['intro'] = _rw['intro']
+                        print(f"     ✨ Keyword woven into intro.")
+            except Exception as _rwe:
+                print(f"     ⚠️ Intro rewrite skipped: {_rwe}")
+
             return content
     except Exception as e:
         print(f"   ⚠️ Content Generation Error: {e}")
@@ -4302,8 +4425,14 @@ def build_grid_section(b_data, items, section_title, limit=6, url_type="service"
     for item in items_to_process:
         img = get_hosted_image(item, "grid", industry, service_name=item)
         
-        # 💎 STRICT FIX: If no internal links, scroll to the quote form instead of 404ing
-        if Config.GENERATE_INTERNAL_LINKS:
+        # 💎 MODE 1 FIX: sub-service pages don't exist → route CTA to pre-filled WhatsApp (no 404)
+        if mode == "1":
+            from urllib.parse import quote as _q
+            _wa  = b_data.get('whatsapp', '')
+            _msg = _q(f"Hi! I need {clean_title(item)} in {city_display}. Please send me a quote.")
+            link = f"https://wa.me/{_wa}?text={_msg}"
+            btn_text = ui.get('get_quote', 'Get Quote')
+        elif Config.GENERATE_INTERNAL_LINKS:
             link = validate_url(url_type, item, mode)
             btn_text = ui.get('learn_more', 'Learn More')
         else:
@@ -4432,8 +4561,16 @@ def build_zigzag_section(b_data, items, section_title, limit=6, is_child_page=Fa
             if line.strip():
                 bullet_points += f'<span class="service-line">{line.strip().rstrip(".")}.</span>'
         
-        # 💎 STRICT FIX: Handle buttons safely if internal links are turned off
-        if not Config.GENERATE_INTERNAL_LINKS:
+        # 💎 MODE 1 FIX: zigzag items = sub-services on SAME page → WhatsApp route (no 404)
+        if mode == "1":
+            from urllib.parse import quote as _q
+            _wa  = b_data.get('whatsapp', '')
+            _msg = _q(f"Hi! I'm interested in {clean_title(item)}. Please share details and price.")
+            link = f"https://wa.me/{_wa}?text={_msg}"
+            btn_text = ui.get('get_quote', 'Get Quote')
+            btn_class = "btn-primary"
+            btn_disabled = ''
+        elif not Config.GENERATE_INTERNAL_LINKS:
             link = "#v360-wrapper"
             btn_text = ui.get('get_quote', 'Get Quote')
             btn_class = "btn-primary"
@@ -4983,6 +5120,25 @@ def get_enterprise_css(b_data):
             max-width: 100vw !important;
             margin: 0 !important;
             padding: 0 !important;
+        }}
+
+        /* 🛑 MODE 1 FUNNEL HEADER GAP FIX:
+           Neutralize theme header/content top spacing that sits ABOVE the
+           sticky funnel header (which lives outside #v360-wrapper). */
+        body {{
+            padding-top: 0 !important;
+        }}
+        #content, #primary, #main, .site-main, .site-content,
+        .entry-content, .ast-container, .elementor-section-wrap,
+        header.site-header, #masthead, .site-header,
+        .elementor-location-header {{
+            margin: 0 !important;
+            padding: 0 !important;
+            min-height: 0 !important;
+        }}
+        [id^="univ-header-"][id$="-funnel"] {{
+            margin-top: 0 !important;
+            top: 0 !important;
         }}
 
         /* ===== MASTER WRAPPER ===== */
@@ -5642,42 +5798,91 @@ def assemble_enhanced_page_without_header(b_data, content_data, page_type="child
         flat_list = b_data.get('flat_services_list', [])
         secondary_items = [s for s in flat_list if s not in primary_items]
 
-        grid_items = []
-        zigzag_items = []
+        # 🧬 PAGE_DNA: site-unique layout blueprint
+        _dna = b_data.get('page_dna', {})
+        _services_display = _dna.get("services_display", "mixed")
+        _home_order = _dna.get("home_section_order",
+                               ["services_grid", "process_steps", "why_choose", "reviews", "areas", "internal_links", "faq"])
+        _faq_pos = _dna.get("faq_position", "bottom")
 
-        # 💎 2. THE PERFECT 1-10 MATH LOGIC (NO RANDOMIZERS) 💎
-        total_primary = len(primary_items)
-        
-        if total_primary <= 2:
-            # 1 or 2 items: Force Zigzags to prevent hollow Grid spaces
+        # ── Renderer for the services block (honors services_display) ──
+        def _render_services_block():
             grid_items = []
-            zigzag_items = (primary_items + secondary_items)[:4] 
-            
-        elif 3 <= total_primary < 6:
-            # 3 to 5 items: Exactly 3 Grids, the rest go to Zigzags
-            grid_items = primary_items[:3]
-            zigzag_items = (primary_items[3:] + secondary_items)[:4]
-            
-        else:
-            # 6+ items: Exactly 6 Grids, exactly 4 Zigzags
-            grid_items = primary_items[:6]
-            zigzag_items = (primary_items[6:] + secondary_items)[:4]
+            zigzag_items = []
+            total_primary = len(primary_items)
 
-        # 3. BUILD THE HTML DIRECTLY
-        if grid_items:
-            # Pass home_url_type so it links perfectly to categories (if applicable)
-            html += build_grid_section(b_data, grid_items, core_title, limit=len(grid_items), url_type=home_url_type)
-            
-        if zigzag_items:
-            # Always link secondary zigzag items as specific "services" to avoid 404s
-            html += build_zigzag_section(b_data, zigzag_items, zig_title, limit=len(zigzag_items), is_child_page=False, url_type="service")
+            if _services_display == "grid":
+                # Pure grid — up to 9 items
+                return build_grid_section(b_data, (primary_items + secondary_items)[:9],
+                                          core_title, limit=9, url_type=home_url_type)
+            elif _services_display == "zigzag":
+                # Pure zigzag — up to 6 items
+                return build_zigzag_section(b_data, (primary_items + secondary_items)[:6],
+                                            core_title, limit=6, is_child_page=False, url_type="service")
 
-        # 4. WHY CHOOSE US
-        if content_data.get('why_choose_us'):
-            html += build_infographic_section(content_data.get('why_choose_us', [])[:3], b_data)
-            
-        # 5. INTERNAL LINKS / CATEGORIES
-        html += build_internal_links_section(b_data, "home", "home")
+            # "mixed" — the perfect 1-10 math (default)
+            if total_primary <= 2:
+                grid_items = []
+                zigzag_items = (primary_items + secondary_items)[:4]
+            elif 3 <= total_primary < 6:
+                grid_items = primary_items[:3]
+                zigzag_items = (primary_items[3:] + secondary_items)[:4]
+            else:
+                grid_items = primary_items[:6]
+                zigzag_items = (primary_items[6:] + secondary_items)[:4]
+
+            _h = ""
+            if grid_items:
+                _h += build_grid_section(b_data, grid_items, core_title, limit=len(grid_items), url_type=home_url_type)
+            if zigzag_items:
+                _h += build_zigzag_section(b_data, zigzag_items, zig_title, limit=len(zigzag_items), is_child_page=False, url_type="service")
+            return _h
+
+        # ── Section renderers keyed by DNA names ──
+        def _render_home_section(name):
+            if name == "services_grid":
+                return _render_services_block()
+            elif name == "why_choose":
+                if content_data.get('why_choose_us'):
+                    return build_infographic_section(content_data.get('why_choose_us', [])[:3], b_data)
+                return ""
+            elif name == "reviews":
+                if content_data.get('reviews'):
+                    _areas = content_data.get('areas_served', [b_data.get('city', '')])
+                    return build_testimonials_section(b_data, content_data.get('reviews', []), _areas)
+                return ""
+            elif name == "areas":
+                if content_data.get('areas_served'):
+                    return build_areas_served(b_data, content_data.get('areas_served', []))
+                return ""
+            elif name == "process_steps":
+                return build_how_it_works_section(b_data)
+            elif name == "internal_links":
+                return build_internal_links_section(b_data, "home", "home")
+            elif name == "faq":
+                # FAQ handled separately via faq_position — skip inline unless DNA forces it here
+                return ""
+            return ""
+
+        # ── Render home in DNA order (skip faq here, place it per faq_position) ──
+        _faq_html = ""
+        if content_data.get('faqs'):
+            _faq_html = build_faq_section(content_data.get('faqs'), None, b_data)
+
+        for _sec in _home_order:
+            if _sec == "faq":
+                continue  # placed via faq_position below
+            html += _render_home_section(_sec)
+            # Insert FAQ right after why_choose if DNA requests it
+            if _faq_pos == "after_why_choose" and _sec == "why_choose":
+                html += _faq_html
+                _faq_html = ""  # consumed
+
+        # Any remaining FAQ goes at the bottom
+        if _faq_html:
+            html += _faq_html
+
+        _home_dna_rendered = True
         
     elif page_type == "parent":
         # 🌍 5-LANGUAGE TRANSLATIONS FOR CATEGORY PAGES
@@ -5738,8 +5943,8 @@ def assemble_enhanced_page_without_header(b_data, content_data, page_type="child
             html += reviews_html
         # "why_choose" already placed earlier in each branch — position kept as-is  
         
-    # 9. FAQS
-    if content_data.get('faqs'):
+    # 9. FAQS — home page already placed its FAQ via PAGE_DNA faq_position
+    if content_data.get('faqs') and not (page_type == "home" and 'page_dna' in b_data):
         html += build_faq_section(content_data.get('faqs'), service_name, b_data)
     
     html += '</div>'
@@ -6102,6 +6307,21 @@ def run_generator():
 
     # 🎯 DESIGN SPEC — coordinated hero/how-it-works content for entire site
     b_data['design_spec'] = generate_design_spec(b_data)
+
+    # ── H1 KEYWORD GUARANTEE: force primary keyword into the hero H1 ──
+    _loc = b_data.get("city") or b_data.get("country", "")
+    _ind = b_data.get("industry", "")
+    _kw_check = extract_keyword_tiers(b_data, _ind, _ind, _loc, b_data.get("target_lang", "en"))
+    _primary_kw = (_kw_check.get("high_intent") or [None])[0]
+    if _primary_kw:
+        _h1 = b_data['design_spec'].get("hero_title", "")
+        if _primary_kw.lower() not in _h1.lower():
+            _words = _primary_kw.title().split()[:3]
+            b_data['design_spec']["hero_title"] = f"{' '.join(_words)} — {_loc}".strip(" —")
+            print(f"   ⚡ H1 keyword fixed: \"{b_data['design_spec']['hero_title']}\"")
+
+    # 🧬 PAGE_DNA — site-unique layout blueprint (one Claude call)
+    b_data['page_dna'] = generate_page_dna(b_data)
 
     # ── 🛑 LANGUAGE ROUTING (Menu links ↔ Published slugs PERFECT MATCH) ──────
     Config.SERVICE_BASE_PATH = "/"
