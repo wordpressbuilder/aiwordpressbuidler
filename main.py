@@ -4,7 +4,7 @@ import cloudinary
 import cloudinary.uploader
 import openai
 import replicate
-from niche_engine import (
+from niche_engine import ( 
     NicheEngine, classify_niche, generate_dynamic_profile, get_page_variant,
     _get_business_tokens, _hue_shift, get_section_order,
     NICHE_PROFILES, NICHE_MAP, get_section_bg, niche_font_import, BG_COLORS
