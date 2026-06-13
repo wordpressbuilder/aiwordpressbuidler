@@ -4,6 +4,13 @@ import cloudinary
 import cloudinary.uploader
 import openai
 import replicate
+from niche_engine import (
+    NicheEngine, classify_niche, generate_dynamic_profile, get_page_variant,
+    _get_business_tokens, _hue_shift, get_section_order,
+    NICHE_PROFILES, NICHE_MAP, get_section_bg, niche_font_import, BG_COLORS,
+    get_card_variant
+)
+from mode1_landing_engine import build_mode1_landing_page
 import anthropic
 import json
 import random
@@ -441,6 +448,10 @@ def init_clients():
 
 CLIENTS = init_clients()
 
+# ==============================================================================
+# 🎨 NICHE-AWARE DESIGN PROFILE SYSTEM — now imported from niche_engine.py
+# ==============================================================================
+
 # Data Caches
 IMAGE_CACHE = {} 
 ZIGZAG_CONTENT_CACHE = {}
@@ -739,7 +750,84 @@ def get_composition_and_culture(target_lang="en", context_mode="hero"):
     }
     return cultural, compositions.get(context_mode, compositions["hero"])
 
+# ==============================================================================
+# 🖼️ WORDPRESS MEDIA LIBRARY UPLOADER (Cloudinary replacement + compression)
+# ==============================================================================
+def upload_image_to_wp_media(image_url_or_data, alt_text="", filename_hint="image", quality=82, max_width=1600):
+    """
+    Downloads/decodes an image (URL or base64 data-uri), compresses it with PIL
+    (matches old image_localizer.py behavior — JPEG quality + max-width resize),
+    then uploads to WordPress Media Library via REST API.
+    Returns the WP-hosted attachment URL (or None on failure).
+    """
+    try:
+        from PIL import Image
+        from io import BytesIO
 
+        # 1. Get raw bytes (handle both http URLs and data:image/...;base64 URIs)
+        if image_url_or_data.startswith("data:image"):
+            b64_part = image_url_or_data.split(",", 1)[1]
+            raw_bytes = base64.b64decode(b64_part)
+        else:
+            resp = requests.get(image_url_or_data, timeout=30)
+            resp.raise_for_status()
+            raw_bytes = resp.content
+
+        # 2. Open + resize + compress with PIL (mirrors image_localizer.py quality=82)
+        img = Image.open(BytesIO(raw_bytes))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+
+        if img.width > max_width:
+            ratio = max_width / float(img.width)
+            new_size = (max_width, int(img.height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+
+        out_buffer = BytesIO()
+        img.save(out_buffer, format="JPEG", quality=quality, optimize=True)
+        out_buffer.seek(0)
+        compressed_bytes = out_buffer.getvalue()
+        print(f"   📉 Image compressed: {len(raw_bytes)//1024}KB → {len(compressed_bytes)//1024}KB")
+
+        # 3. SEO-friendly filename (mirrors image_localizer.py _make_filename / _slug)
+        safe_name = slugify(filename_hint)[:60] or "image"
+        filename = f"{safe_name}-{int(time.time())}-{random.randint(100,999)}.jpg"
+
+        # 4. Upload to WP Media Library
+        auth = base64.b64encode(f"{Config.WP_USER}:{Config.WP_APP_PASSWORD}".encode()).decode('utf-8')
+        headers = {
+            "Authorization": f"Basic {auth}",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type": "image/jpeg",
+            "User-Agent": "Mozilla/5.0"
+        }
+        media_url = f"{Config.WP_URL.rstrip('/')}/wp-json/wp/v2/media"
+        response = requests.post(media_url, headers=headers, data=compressed_bytes, verify=False, timeout=60)
+
+        if response.status_code == 201:
+            media_data = response.json()
+            attachment_id = media_data['id']
+            source_url = media_data['source_url']
+
+            # 5. Set ALT text for SEO (separate PATCH call)
+            if alt_text:
+                patch_headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/json"}
+                requests.patch(
+                    f"{media_url}/{attachment_id}",
+                    headers=patch_headers,
+                    json={"alt_text": alt_text[:120], "title": alt_text[:100]},
+                    verify=False, timeout=30
+                )
+
+            print(f"   ✅ Uploaded to WP Media Library: {filename}")
+            return source_url
+        else:
+            print(f"   ⚠️ WP Media upload failed: {response.status_code} - {response.text[:150]}")
+            return None
+
+    except Exception as e:
+        print(f"   ⚠️ Image localization error: {e}")
+        return None
 @retry_operation(max_retries=3)
 def get_hosted_image(prompt_text, context_mode="hero", industry="General", is_category=False, service_name="", category_name="", target_lang="en"):
     """
@@ -846,30 +934,21 @@ def get_hosted_image(prompt_text, context_mode="hero", industry="General", is_ca
         except Exception as e:
             print(f"   ⚠️ Generation error on attempt {attempt + 1}: {str(e)[:100]}")
 
-    # 4. Upload & Cache
-    if final_image_url and CLIENTS.get('cloudinary'):
-        try:
-            print(f"   ☁️ Uploading to Cloudinary...")
-            public_id = f"svc_{int(time.time())}_{random.randint(100,999)}"
-            width = 1200 if context_mode == "hero" else 800
-            
-            res = cloudinary.uploader.upload(
-                final_image_url,
-                folder="static_website/services",
-                public_id=public_id,
-                quality=90,
-                transformation=[
-                    {"width": width, "crop": "scale"},
-                    {"quality": "auto:best"},
-                    {"fetch_format": "auto"}
-                ]
-            )
-            final_image_url = res.get('secure_url', final_image_url)
-            print(f"   ✅ Image uploaded successfully")
-            
-        except Exception as e:
-            print(f"   ⚠️ Cloudinary Upload failed: {e}")
-            final_image_url = None  
+    # 4. Upload & Cache — WordPress Media Library (replaces Cloudinary)
+    if final_image_url:
+        width = 1600 if context_mode == "hero" else 1000
+        alt_text = f"{clean_title(service_clean)} - {clean_title(industry)}"
+        wp_url = upload_image_to_wp_media(
+            final_image_url,
+            alt_text=alt_text,
+            filename_hint=f"{service_clean}-{context_mode}",
+            quality=82,
+            max_width=width
+        )
+        if wp_url:
+            final_image_url = wp_url
+        else:
+            print(f"   ⚠️ WP Media upload failed, falling back to original URL")  
             
     # 5. Ultimate Emergency Fallback
     if not final_image_url:
@@ -1229,6 +1308,124 @@ class UniversalHeader:
                     {item['title']}
                 </a>"""
         
+        if mode == "1":
+            anchors_present = b_data.get('_m1_anchors', ['services', 'faq', 'contact'])
+            target_lang = b_data.get('target_lang', 'en')
+
+            if target_lang == 'ar':
+                m1_labels = {"services": "خدماتنا", "pricing": "الأسعار",
+                             "reviews": "آراء العملاء", "faq": "الأسئلة الشائعة",
+                             "contact": "اتصل بنا"}
+                menu_word = "القائمة"
+                urgency_txt = "⚡ خدمة طوارئ 24/7 — استجابة سريعة"
+            else:
+                m1_labels = {"services": "Services", "pricing": "Pricing",
+                             "reviews": "Reviews", "faq": "FAQ", "contact": "Contact"}
+                menu_word = "Menu"
+                urgency_txt = "⚡ 24/7 Emergency Service — Fast Response"
+
+            m1_icons = {"services": "fa-tools", "pricing": "fa-tags",
+                        "reviews": "fa-star", "faq": "fa-question-circle",
+                        "contact": "fa-phone-alt"}
+
+            menu_order = [k for k in ["services", "pricing", "reviews", "faq", "contact"]
+                          if k in anchors_present]
+            if "contact" not in menu_order:
+                menu_order.append("contact")
+
+            _pc = primary_color
+            _ac = accent_color
+
+            desktop_nav = ""
+            drawer_nav = ""
+            for key in menu_order:
+                desktop_nav += f'''
+                <a href="#{key}" style="color:#{_pc}; font-weight:600; text-decoration:none; padding:8px 10px; font-size:15px; display:inline-flex; align-items:center; gap:6px; border-radius:8px;">
+                    <i class="fas {m1_icons[key]}" style="color:#{_ac}; font-size:13px;"></i> {m1_labels[key]}
+                </a>'''
+                drawer_nav += f'''
+                <a href="#{key}" style="display:flex; align-items:center; gap:12px; padding:15px; border:1px solid #e2e8f0; border-radius:10px; background:white; color:#{_pc}; font-weight:600; text-decoration:none;">
+                    <i class="fas {m1_icons[key]}" style="color:#{_ac};"></i> {m1_labels[key]}
+                </a>'''
+
+            funnel_header_html = f"""
+<div id="{root_id}-funnel" style="width:100%; font-family:'Outfit',sans-serif; position:sticky; top:0; z-index:9999; direction:{dir_attr};">
+    <div style="background:#0C2340; color:#E8F4FD; padding:7px 20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; border-bottom:2px solid #1D9E75;">
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span style="width:8px; height:8px; border-radius:50%; background:#5DCAA5; display:inline-block;"></span>
+            <span style="font-size:12px; font-weight:600;">{urgency_txt}</span>
+        </div>
+        <div style="display:flex; gap:8px;">
+            <a href="tel:{b_data.get('phone','')}" style="background:#1D9E75; color:#E1F5EE; padding:5px 14px; border-radius:20px; font-size:11px; font-weight:700; text-decoration:none; white-space:nowrap;">📞 {b_data.get('phone','')}</a>
+            <a href="https://wa.me/{b_data.get('whatsapp','')}" target="_blank" style="background:#25D366; color:white; padding:5px 14px; border-radius:20px; font-size:11px; font-weight:700; text-decoration:none; white-space:nowrap;">💬 WhatsApp</a>
+        </div>
+    </div>
+    <div style="background:white; box-shadow:0 2px 10px rgba(0,0,0,0.08);">
+        <div style="max-width:1200px; margin:0 auto; padding:10px 20px; display:flex; justify-content:space-between; align-items:center; gap:16px;">
+            <a href="#top" style="display:flex; align-items:center; gap:10px; text-decoration:none; flex-shrink:0;">
+                {logo_content}
+                {logo_text}
+            </a>
+            <nav class="m1-desktop-nav" style="display:flex; align-items:center; gap:4px;">
+                {desktop_nav}
+                <a href="#contact" style="margin-left:10px; display:inline-flex; align-items:center; gap:7px; background:linear-gradient(135deg, #{_ac} 0%, #{_pc} 100%); color:white; padding:11px 24px; border-radius:50px; font-weight:700; text-decoration:none; font-size:0.9rem; box-shadow:0 4px 12px rgba(0,0,0,0.2);">
+                    <i class="fas fa-file-invoice-dollar"></i> {ui.get('get_quote', 'Get Quote')}
+                </a>
+            </nav>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <a href="tel:{b_data.get('phone','')}" class="m1-phone-pill" style="display:inline-flex; align-items:center; gap:7px; background:#{_pc}; color:white; padding:10px 18px; border-radius:50px; font-weight:700; text-decoration:none; font-size:0.85rem;">
+                    <i class="fas fa-phone-alt"></i><span class="funnel-phone-text">{b_data.get('phone','')}</span>
+                </a>
+                <button id="{root_id}-m1-toggle" style="display:none; background:none; border:none; font-size:24px; cursor:pointer; color:#{_pc}; padding:8px;">
+                    <i class="fas fa-bars"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+    <div id="{root_id}-m1-overlay" style="position:fixed; inset:0; background:rgba(15,23,42,0.85); z-index:100000; opacity:0; visibility:hidden; transition:0.3s;"></div>
+    <div id="{root_id}-m1-drawer" style="position:fixed; top:0; right:-100%; width:85%; max-width:380px; height:100vh; background:#f8fafc; z-index:100001; transition:0.4s; box-shadow:-10px 0 30px rgba(0,0,0,0.1); overflow-y:auto; direction:{dir_attr};">
+        <div style="padding:22px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; background:white;">
+            <h3 style="font-size:1.15rem; color:#{_pc}; font-weight:700; margin:0;">{menu_word}</h3>
+            <button id="{root_id}-m1-close" style="background:none; border:none; font-size:28px; cursor:pointer; color:#{_pc};">&times;</button>
+        </div>
+        <div style="padding:22px; display:flex; flex-direction:column; gap:12px;">
+            {drawer_nav}
+            <a href="tel:{b_data.get('phone','')}" style="display:block; padding:15px; background:#{_pc}; color:white; text-align:center; font-weight:700; text-decoration:none; border-radius:10px;">
+                <i class="fas fa-phone-alt"></i> {b_data.get('phone','')}
+            </a>
+            <a href="https://wa.me/{b_data.get('whatsapp','')}" target="_blank" style="display:block; padding:15px; background:#25D366; color:white; text-align:center; font-weight:700; text-decoration:none; border-radius:10px;">
+                <i class="fab fa-whatsapp"></i> WhatsApp
+            </a>
+        </div>
+    </div>
+</div>
+<style>
+html {{ scroll-behavior: smooth; }}
+@media (max-width:991px) {{
+    #{root_id}-funnel .m1-desktop-nav {{ display:none !important; }}
+    #{root_id}-funnel #{root_id}-m1-toggle {{ display:block !important; }}
+}}
+@media (max-width:600px) {{
+    #{root_id}-funnel .funnel-phone-text {{ display:none !important; }}
+}}
+</style>
+<script>
+(function() {{
+    var toggle  = document.getElementById('{root_id}-m1-toggle');
+    var drawer  = document.getElementById('{root_id}-m1-drawer');
+    var overlay = document.getElementById('{root_id}-m1-overlay');
+    var closeB  = document.getElementById('{root_id}-m1-close');
+    function openM()  {{ drawer.style.right='0'; overlay.style.opacity='1'; overlay.style.visibility='visible'; }}
+    function closeM() {{ drawer.style.right='-100%'; overlay.style.opacity='0'; overlay.style.visibility='hidden'; }}
+    if(toggle)  toggle.addEventListener('click', openM);
+    if(closeB)  closeB.addEventListener('click', closeM);
+    if(overlay) overlay.addEventListener('click', closeM);
+    if(drawer)  drawer.querySelectorAll('a[href^="#"]').forEach(function(a) {{ a.addEventListener('click', closeM); }});
+}})();
+</script>
+"""
+            return funnel_header_html
+
         # 🛑 RTL FIX INJECTED INTO ROOT DIV
         return f"""
         <div id="{root_id}" dir="{dir_attr}" style="width:100%; display:block; background:white; box-shadow:0 2px 10px rgba(0,0,0,0.05); font-family:'Outfit', sans-serif;">
@@ -3424,7 +3621,160 @@ def generate_seo_meta_description(b_data, service_name, keywords, industry, loca
             print(f"   ⚠️ Meta description generation failed: {e}")
     
     return fallback
+def build_how_it_works_section(b_data):
+    """Renders the 4-step 'How It Works' band from b_data['design_spec']."""
+    spec = b_data.get('design_spec', {})
+    steps = spec.get('how_it_works', [])
+    target_lang = b_data.get('target_lang', 'en')
+    primary = b_data.get('primary', '#1A73E8')
 
+    if not steps or len(steps) < 4:
+        return ""
+
+    titles = {"en": "How It Works", "ar": "كيف نعمل؟", "es": "Cómo Funciona",
+              "fr": "Comment Ça Marche", "de": "Wie Es Funktioniert"}
+    title = titles.get(target_lang, titles["en"])
+
+    cards = ""
+    for i, step in enumerate(steps[:4]):
+        cards += f'''
+        <div style="background:white; border-radius:16px; padding:28px 22px;
+                    box-shadow:0 4px 20px rgba(0,0,0,0.07); border:1px solid #e2e8f0;
+                    text-align:center;">
+            <div style="width:48px; height:48px; background:{primary}; border-radius:50%;
+                        display:flex; align-items:center; justify-content:center;
+                        font-size:1.3rem; margin:0 auto 14px; color:white;
+                        font-weight:800; box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+                {i+1}
+            </div>
+            <div style="font-size:1.8rem; margin-bottom:10px;">{step.get('emoji','✅')}</div>
+            <h4 style="font-size:1.05rem; margin-bottom:10px; color:#0f172a; font-weight:700;">
+                {step.get('title','')}
+            </h4>
+            <p style="color:#64748b; font-size:0.9rem; line-height:1.6;">
+                {step.get('desc','')}
+            </p>
+        </div>'''
+
+    return f'''
+    <section class="section" style="background:#f8fafc;">
+        <div class="container">
+            <h2 style="text-align:center; margin-bottom:50px; font-size:2.2rem; color:var(--primary);">{title}</h2>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:24px;">{cards}</div>
+        </div>
+    </section>'''
+
+
+def generate_design_spec(b_data):
+    """One Claude call that defines hero_title, hero_sub, trust_badge, how_it_works,
+    services_intro, why_choose_intro for the whole site. Cached in b_data['design_spec']."""
+
+    name     = b_data.get('name', 'Our Company')
+    industry = b_data.get('industry', 'Service')
+    city     = b_data.get('city') or b_data.get('country', 'your area')
+    phone    = b_data.get('phone', '')
+    services = b_data.get('flat_services_list', [])[:8]
+    target_lang = b_data.get('target_lang', 'en')
+
+    lang_names = {"en": "English", "ar": "Arabic", "es": "Spanish", "fr": "French", "de": "German"}
+    lang_name = lang_names.get(target_lang, "English")
+
+    fallback_steps = {
+        "ar": [
+            {"emoji": "📞", "title": "اتصل أو احجز", "desc": f"تواصل معنا 24/7 لأي احتياج في {city}."},
+            {"emoji": "🔍", "title": "تشخيص مجاني", "desc": "نفحص المشكلة مجاناً قبل تقديم أي سعر."},
+            {"emoji": "💰", "title": "سعر واضح مسبقاً", "desc": "سعر ثابت بدون مفاجآت."},
+            {"emoji": "✅", "title": "عمل مضمون", "desc": "ننجز العمل من أول مرة مع ضمان شامل."},
+        ],
+    }
+    default_steps = fallback_steps.get(target_lang, [
+        {"emoji": "📞", "title": "Call or Book", "desc": f"Reach us 24/7 for any {industry.lower()} need in {city}."},
+        {"emoji": "🔍", "title": "Free Diagnosis", "desc": "A specialist inspects the problem at no charge before quoting."},
+        {"emoji": "💰", "title": "Upfront Quote", "desc": "Fixed price — no hidden charges, ever."},
+        {"emoji": "✅", "title": "Guaranteed Work", "desc": "We complete the job right the first time."},
+    ])
+
+    fallback = {
+        "hero_title": f"Expert {industry} in {city}",
+        "hero_sub": f"Fast, reliable service — licensed professionals reaching {city} in 60 minutes",
+        "trust_badge": f"#1 Rated in {city}",
+        "how_it_works": default_steps,
+        "services_intro": f"Explore our professional {industry.lower()} services across {city}.",
+        "why_choose_intro": f"Why {city} residents choose {name}",
+    }
+    if target_lang == 'ar':
+        fallback.update({
+            "hero_title": f"خبراء {industry} الموثوقون في {city}",
+            "hero_sub": f"خدمة سريعة واحترافية — نصل إليك خلال 60 دقيقة في {city}",
+            "trust_badge": f"#1 موثوق في {city}",
+            "services_intro": f"اكتشف خدمات {industry} الاحترافية في {city}.",
+            "why_choose_intro": f"لماذا يختارنا أهل {city}؟",
+        })
+
+    if not CLIENTS.get('claude'):
+        return fallback
+
+    services_str = ", ".join(services) if services else industry
+    _seed = b_data.get('site_seed', 0)
+    headline_styles = [
+        "BENEFIT-LED: lead with the strongest outcome",
+        "URGENCY-LED: lead with speed/response time",
+        "TRUST-LED: lead with social proof/rating",
+        "PROBLEM-LED: open with the customer's pain",
+    ]
+    chosen_style = headline_styles[_seed % 4]
+
+    prompt = f"""You are an elite conversion copywriter designing a local service website.
+
+UNIQUENESS SEED: {_seed}
+MANDATORY HEADLINE STYLE for hero_title: {chosen_style}
+
+BUSINESS:
+- Name: {name}
+- Industry: {industry}
+- City / Area: {city}
+- Phone: {phone}
+- Key services: {services_str}
+
+OUTPUT LANGUAGE: {lang_name}
+
+RULES:
+1. hero_title: 5-8 words MAX. ONE H1. Must contain the top search keyword + city.
+   No "Professional Services" filler, no year.
+2. hero_sub: max 15 words. Mention speed/reliability/guarantee.
+3. trust_badge: 3-5 words, e.g. "#1 Rated in {city}".
+4. how_it_works: EXACTLY 4 steps specific to {industry}. Titles max 3 words,
+   descs max 18 words, mention {city} in at least one. Emojis in order: 📞 🔍 💰 ✅
+5. services_intro: one sentence (max 20 words).
+6. why_choose_intro: 4-6 words heading.
+
+Return ONLY valid JSON:
+{{
+    "hero_title": "string", "hero_sub": "string", "trust_badge": "string",
+    "how_it_works": [
+        {{"emoji":"📞","title":"string","desc":"string"}},
+        {{"emoji":"🔍","title":"string","desc":"string"}},
+        {{"emoji":"💰","title":"string","desc":"string"}},
+        {{"emoji":"✅","title":"string","desc":"string"}}
+    ],
+    "services_intro": "string", "why_choose_intro": "string"
+}}"""
+
+    try:
+        print(f"\n🎯 Generating DESIGN_SPEC for {name} ({industry}, {city})...")
+        spec = call_claude_json(prompt, "You are a conversion copywriter. Output only valid JSON.")
+        if not spec or 'hero_title' not in spec:
+            return fallback
+        hiw = spec.get('how_it_works', [])
+        while len(hiw) < 4:
+            hiw.append(default_steps[len(hiw)])
+        spec['how_it_works'] = hiw[:4]
+        spec['hero_title'] = re.sub(r'\s*\b20\d{2}\b\s*', '', spec['hero_title']).strip(' -—|:')
+        print(f"   ✅ DESIGN_SPEC ready: \"{spec['hero_title']}\"")
+        return spec
+    except Exception as e:
+        print(f"   ⚠️ DESIGN_SPEC generation error: {e}")
+        return fallback
 def generate_evergreen_title(service_name, business_name, current_year):
     """Generates an evergreen SEO title tag."""
     clean_srv = clean_title(service_name)
@@ -4010,8 +4360,12 @@ def build_grid_section(b_data, items, section_title, limit=6, url_type="service"
                 ]
                 description = random.choice(en_templates)
 
+        _niche = b_data.get('niche_engine')
+        card_variant = getattr(_niche, 'card_variant', 'image_top') if _niche else 'image_top'
+        extra_class = f" cv-{card_variant}" if card_variant != "image_top" else ""
+
         html += f'''
-        <div class="service-card">
+        <div class="service-card{extra_class}">
             <div class="service-card-img">
                 <img src="{img}" loading="lazy" alt="{clean_title(item)}">
             </div>
@@ -4584,9 +4938,27 @@ def get_enterprise_css(b_data):
     """
     is_rtl = b_data.get('is_rtl', False)
     
+    niche_profile = b_data.get('niche_profile', NICHE_PROFILES["general"])
+    heading_font = niche_profile.get('font_primary', 'Outfit')
+
+    # 🎨 Section background alternation — site_seed rotates the offset
+    _seed = b_data.get('site_seed', 0)
+    _offset = _seed % 4
+    _sec0 = get_section_bg(niche_profile, 0 + _offset)
+    _sec1 = get_section_bg(niche_profile, 1 + _offset)
+    _sec2 = get_section_bg(niche_profile, 2 + _offset)
+    _sec3 = get_section_bg(niche_profile, 3 + _offset)
+    _bg_n1, _bg_n2, _bg_n3, _bg_n4 = "4n+1", "4n+2", "4n+3", "4n+4"
+    _extra_font = niche_font_import(niche_profile)
+    _font_import_url = "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800"
+    if _extra_font:
+        _font_import_url += _extra_font
+    _font_import_url += "&display=swap"
+
     css = f"""
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="{_font_import_url}" rel="stylesheet">
     <script src="https://code.iconify.design/3/3.1.0/iconify.min.js"></script>
     
     <!-- 🛑 SEO FIX: Physically remove the theme's duplicate H1 so Google only sees the Hero H1 -->
@@ -4600,7 +4972,10 @@ def get_enterprise_css(b_data):
     </script>
 
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+        /* Outfit loaded via <link> above; niche heading font applied below */
+        #v360-wrapper h1, #v360-wrapper h2, #v360-wrapper h3, #v360-wrapper .hero-title {{
+            font-family: '{heading_font}', 'Outfit', sans-serif !important;
+        }}
         
         /* 🛑 CRITICAL FIX: Kill Horizontal Scrolling globally */
         html, body {{
@@ -4732,6 +5107,12 @@ def get_enterprise_css(b_data):
         }}
         
         #v360-wrapper .bg-gray {{ background-color: var(--light-bg) !important; }}
+
+        /* ── SECTION ALTERNATING BACKGROUNDS (niche bg_pattern + site_seed offset) ── */
+        #v360-wrapper .section:nth-of-type({_bg_n1}) {{ background: {_sec0} !important; }}
+        #v360-wrapper .section:nth-of-type({_bg_n2}) {{ background: {_sec1} !important; }}
+        #v360-wrapper .section:nth-of-type({_bg_n3}) {{ background: {_sec2} !important; }}
+        #v360-wrapper .section:nth-of-type({_bg_n4}) {{ background: {_sec3} !important; }}
         
         /* ===== HERO SECTION ===== */
         #v360-wrapper .hero {{ 
@@ -5163,6 +5544,9 @@ def assemble_enhanced_page_without_header(b_data, content_data, page_type="child
     
     # 🌟 CRITICAL FIX: Inject CSS directly into the wrapper so it loads instantly in WordPress
     html = get_enterprise_css(b_data)
+
+    if b_data.get('mode') == "1":
+        html += UniversalHeader.render(b_data, None, "1", "")
     
     # 🛡️ DYNAMIC LANGUAGE DIRECTION INJECTION (Handles Arabic/Hebrew/Urdu RTL automatically)
     dir_attr = get_language_direction(b_data.get('target_lang', 'en'))
@@ -5195,7 +5579,29 @@ def assemble_enhanced_page_without_header(b_data, content_data, page_type="child
     
     # 1. HERO SECTION
     html += build_enhanced_hero(b_data, title, sub, hero_img, b_data.get('flat_services_list'), content_data.get('trust_signals'))
-    
+
+    if b_data.get('mode') != "1":
+        niche = b_data.get('niche_engine')
+        if niche:
+            html += niche.get_extra_sections(content_data, service_name)
+
+    # ===== MODE 1 — UNIVERSAL LANDING ENGINE =====
+    if b_data.get('mode') == "1" and page_type == "child" and service_name:
+        sub_services = generate_sub_services(b_data, service_name)
+        body_html = build_mode1_landing_page(
+            b_data=b_data, service_name=service_name, sub_services=sub_services,
+            content_data=content_data, call_claude_json=call_claude_json,
+            build_zigzag_section=build_zigzag_section,
+            build_grid_section=build_grid_section,
+            build_infographic_section=build_infographic_section,
+            build_areas_served=build_areas_served,
+            build_faq_section=build_faq_section,
+        )
+        html += body_html
+        html += '</div>'
+        return html
+    # ===== END MODE 1 =====
+
     # 2. INTRO PARAGRAPH
     if content_data.get('intro'):
         html += f'''
@@ -5318,15 +5724,20 @@ def assemble_enhanced_page_without_header(b_data, content_data, page_type="child
             
         html += build_internal_links_section(b_data, service_name, "child")
 
-    # 7. LOCATIONS (Areas Served)
-    if content_data.get('areas_served'):
-        html += build_areas_served(b_data, content_data.get('areas_served', []))
-        
-    # 8. REVIEWS (Displays schema reviews to prevent Google penalties)
+    # 7 & 8. AREAS SERVED + REVIEWS — order varies per business (niche_engine section-order)
+    areas_html = build_areas_served(b_data, content_data.get('areas_served', [])) if content_data.get('areas_served') else ""
+    reviews_html = ""
     if content_data.get('reviews'):
-        # 🎯 FIX APPLIED HERE: Pass the generated neighborhoods list to randomize locations
         areas_list = content_data.get('areas_served', [b_data.get('city', '')])
-        html += build_testimonials_section(b_data, content_data.get('reviews', []), areas_list)  
+        reviews_html = build_testimonials_section(b_data, content_data.get('reviews', []), areas_list)
+
+    section_order = get_section_order(b_data)
+    for sec in section_order:
+        if sec == "areas":
+            html += areas_html
+        elif sec == "reviews":
+            html += reviews_html
+        # "why_choose" already placed earlier in each branch — position kept as-is  
         
     # 9. FAQS
     if content_data.get('faqs'):
@@ -5481,6 +5892,27 @@ def run_generator():
 
     wp_conf = {"url": Config.WP_URL, "user": Config.WP_USER, "pass": Config.WP_APP_PASSWORD}
 
+    # ── 🛡️ WORDPRESS CONNECTION PRE-CHECK (resource-saving) ──────────────────
+    print("\n🔌 Testing WordPress connection...")
+    try:
+        _auth = base64.b64encode(f"{wp_conf['user']}:{wp_conf['pass']}".encode()).decode('utf-8')
+        _headers = {"Authorization": f"Basic {_auth}", "User-Agent": "Mozilla/5.0"}
+        _check_url = f"{wp_conf['url'].rstrip('/')}/wp-json/wp/v2/users/me"
+        _resp = requests.get(_check_url, headers=_headers, verify=False, timeout=15)
+        if _resp.status_code == 200:
+            _user_data = _resp.json()
+            print(f"   ✅ Connected to WordPress as: {_user_data.get('name', wp_conf['user'])}")
+        else:
+            print(f"   ❌ WordPress connection FAILED — Status {_resp.status_code}")
+            print(f"   Response: {_resp.text[:200]}")
+            print("\n❌ ABORTING — fix WP_URL/WP_USER/WP_APP_PASSWORD before running again.")
+            sys.exit(1)
+    except Exception as e:
+        print(f"   ❌ WordPress connection ERROR: {e}")
+        print("\n❌ ABORTING — check WP_URL is reachable and credentials are correct.")
+        sys.exit(1)
+    # ── END PRE-CHECK ──────────────────────────────────────────────────────────
+
     # ── 🌐 LANGUAGE (5-LANGUAGE SYSTEM: en / ar / es / fr / de) ───────────────
     lang_input = cfg.get("language", "en").strip().lower()
     if lang_input in ["no", ""]:
@@ -5627,7 +6059,12 @@ def run_generator():
         print("\nℹ️ Skipping Logo Generation (Not in Full Website Mode)")
 
     # ── B_DATA ────────────────────────────────────────────────────────────────
+    import hashlib as _hashlib
+    _site_seed_src = f"{name}{industry}{city}{country}".lower().strip()
+    _site_seed = int(_hashlib.md5(_site_seed_src.encode()).hexdigest()[:8], 16)
+
     b_data = {
+        "site_seed": _site_seed,
         "name": name, "city": city, "state": state, "country": country,
         "industry": industry, "phone": phone, "whatsapp": clean_phone,
         "primary": colors['primary'], "secondary": colors['secondary'], "accent": colors['accent'],
@@ -5644,6 +6081,26 @@ def run_generator():
         "lang_mode": lang_input,
         "generated_pages": []
     }
+
+    # ── 🎨 NICHE-AWARE DESIGN PROFILE (variety per business: fonts, trust items, etc.) ──
+    print("\n🎨 Generating niche design profile...")
+    niche = NicheEngine(b_data, claude_caller=call_claude_json)
+    b_data['niche_engine'] = niche
+    niche_slug = niche.slug
+    niche_profile = niche.profile
+    b_data['niche_slug'] = niche_slug
+    b_data['niche_profile'] = niche_profile
+
+    tok = _get_business_tokens(b_data)
+    p = niche_profile["palette"]
+    b_data['primary'] = _hue_shift(p["primary"], tok["hue_shift"])
+    b_data['secondary'] = _hue_shift(p["secondary"], tok["hue_shift"] + tok["secondary_extra"])
+    b_data['accent'] = p["accent"]
+
+    print(f"   ✅ Niche: {niche_slug} | Heading Font: {niche_profile.get('font_primary')} | Label: {niche_profile.get('label')}")
+
+    # 🎯 DESIGN SPEC — coordinated hero/how-it-works content for entire site
+    b_data['design_spec'] = generate_design_spec(b_data)
 
     # ── 🛑 LANGUAGE ROUTING (Menu links ↔ Published slugs PERFECT MATCH) ──────
     Config.SERVICE_BASE_PATH = "/"
