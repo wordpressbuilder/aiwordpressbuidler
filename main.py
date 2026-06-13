@@ -5873,8 +5873,10 @@ def run_generator():
     # ── WORDPRESS TARGET (URL/User config se, Password sirf Secret se) ────────
     wp_url_cfg  = cfg.get("wordpress_url", "").strip()
     wp_user_cfg = cfg.get("wordpress_user", "").strip()
+    wp_pass_cfg = cfg.get("wordpress_app_password", "").strip()
     if wp_url_cfg:  Config.WP_URL  = wp_url_cfg
     if wp_user_cfg: Config.WP_USER = wp_user_cfg
+    if wp_pass_cfg: Config.WP_APP_PASSWORD = wp_pass_cfg
 
     if not Config.WP_URL or not Config.WP_USER or not Config.WP_APP_PASSWORD:
         print("\n❌ WordPress credentials missing!")
