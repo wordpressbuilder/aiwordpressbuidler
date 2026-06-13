@@ -5445,34 +5445,50 @@ def publish_to_wp_without_header(title, slug, content, parent_id=0, wp_conf=None
 # ==============================================================================
 
 def run_generator():
-    """Main execution function."""
-    
-    print("\n📝 WORDPRESS SITE CONFIGURATION")
+    """Main execution function — GitHub Actions compatible (config.json driven)."""
+    import json as _json
+
+    # ── CONFIG.JSON LOAD ──────────────────────────────────────────────────────
+    _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    if not os.path.exists(_cfg_path):
+        print("\n❌ config.json not found! Repo me config.json rakho.")
+        sys.exit(1)
+
+    with open(_cfg_path, "r", encoding="utf-8") as _f:
+        cfg = _json.load(_f)
+
+    print("\n📋 CONFIG LOADED FROM config.json")
     print("-" * 40)
-    
-    # Business Inputs
-    name = input("Business Name [Global Services]: ").strip() or "Global Services"
-    industry = input("Industry (e.g. Plumbing, SEO, Dental) [General]: ").strip() or "General"
-    
-    print("\n🌍 LOCATION TARGETING")
-    print("-" * 20)
-    country = input("Target Country [USA]: ").strip() or "USA"
-    state = input("Target State/Region: ").strip()
-    city = input("Target City: ").strip()
-    if not city:
-        city = "Major Cities"
-        print(f"   ℹ️ Using '{city}' as default location")
-    
-    # ========== LANGUAGE SELECTION ==========
-    print("\n🌐 LANGUAGE SELECTION")
-    print("en = English (LTR)")
-    print("ar = Arabic (RTL)")
-    print("es = Spanish (LTR)")
-    print("fr = French (LTR)")
-    print("de = German (LTR)")
-    lang_input = input("Select Language [en]: ").strip().lower() or "en"
-    
-    # UI Translations
+
+    # ── WORDPRESS TARGET (URL/User config se, Password sirf Secret se) ────────
+    wp_url_cfg  = cfg.get("wordpress_url", "").strip()
+    wp_user_cfg = cfg.get("wordpress_user", "").strip()
+    if wp_url_cfg:  Config.WP_URL  = wp_url_cfg
+    if wp_user_cfg: Config.WP_USER = wp_user_cfg
+
+    if not Config.WP_URL or not Config.WP_USER or not Config.WP_APP_PASSWORD:
+        print("\n❌ WordPress credentials missing!")
+        print("   wordpress_url + wordpress_user → config.json me")
+        print("   WP_APP_PASSWORD → GitHub Secret me (ya local export)")
+        sys.exit(1)
+
+    if not Config.WP_URL.startswith("http"):
+        Config.WP_URL = "https://" + Config.WP_URL
+    if not Config.WP_URL.endswith("/"):
+        Config.WP_URL += "/"
+    Config.SITE_URL = Config.WP_URL
+    print(f"✅ WordPress Target: {Config.WP_URL} (user: {Config.WP_USER})")
+
+    wp_conf = {"url": Config.WP_URL, "user": Config.WP_USER, "pass": Config.WP_APP_PASSWORD}
+
+    # ── 🌐 LANGUAGE (5-LANGUAGE SYSTEM: en / ar / es / fr / de) ───────────────
+    lang_input = cfg.get("language", "en").strip().lower()
+    if lang_input in ["no", ""]:
+        lang_input = "en"
+    if lang_input not in ["en", "ar", "es", "fr", "de"]:
+        print(f"⚠️ Unknown language '{lang_input}' — defaulting to English")
+        lang_input = "en"
+
     UI_DICT = {
         "en": {
             "home": "Home", "services": "Services", "contact": "Contact",
@@ -5484,7 +5500,8 @@ def run_generator():
             "dir": "ltr", "current_svc": "Current Service", "more_qs": "Have more questions? Call us anytime!",
             "rated": "#1 Rated in", "areas_served_in": "Areas We Serve in",
             "submit_btn": "Get Quote", "service_ph": "Select Service",
-            "name_ph": "Name", "phone_ph": "Phone", "other_services": "Other Services"
+            "name_ph": "Name", "phone_ph": "Phone", "other_services": "Other Services",
+            "whatsapp": "WhatsApp Quote", "get_in_touch": "Get in Touch"
         },
         "ar": {
             "home": "الرئيسية", "services": "خدماتنا", "contact": "اتصل بنا",
@@ -5496,7 +5513,8 @@ def run_generator():
             "dir": "rtl", "current_svc": "الخدمة الحالية", "more_qs": "لديك أسئلة أخرى؟ اتصل بنا في أي وقت!",
             "rated": "الأعلى تقييمًا في", "areas_served_in": "المناطق التي نخدمها في",
             "submit_btn": "احصل على عرض سعر", "service_ph": "اختر الخدمة",
-            "name_ph": "الاسم", "phone_ph": "رقم الهاتف", "other_services": "خدمات أخرى"
+            "name_ph": "الاسم", "phone_ph": "رقم الهاتف", "other_services": "خدمات أخرى",
+            "whatsapp": "واتساب", "get_in_touch": "تواصل معنا"
         },
         "es": {
             "home": "Inicio", "services": "Servicios", "contact": "Contacto",
@@ -5508,7 +5526,8 @@ def run_generator():
             "dir": "ltr", "current_svc": "Servicio Actual", "more_qs": "¿Más preguntas? ¡Llámanos!",
             "rated": "Mejor valorado en", "areas_served_in": "Áreas que servimos en",
             "submit_btn": "Obtener Cotización", "service_ph": "Seleccionar Servicio",
-            "name_ph": "Nombre", "phone_ph": "Teléfono", "other_services": "Otros Servicios"
+            "name_ph": "Nombre", "phone_ph": "Teléfono", "other_services": "Otros Servicios",
+            "whatsapp": "WhatsApp", "get_in_touch": "Contáctenos"
         },
         "fr": {
             "home": "Accueil", "services": "Services", "contact": "Contact",
@@ -5520,7 +5539,8 @@ def run_generator():
             "dir": "ltr", "current_svc": "Service Actuel", "more_qs": "D'autres questions ? Appelez-nous !",
             "rated": "Le mieux noté à", "areas_served_in": "Zones desservies à",
             "submit_btn": "Obtenir un Devis", "service_ph": "Sélectionner un Service",
-            "name_ph": "Nom", "phone_ph": "Téléphone", "other_services": "Autres Services"
+            "name_ph": "Nom", "phone_ph": "Téléphone", "other_services": "Autres Services",
+            "whatsapp": "WhatsApp", "get_in_touch": "Contactez-nous"
         },
         "de": {
             "home": "Startseite", "services": "Dienstleistungen", "contact": "Kontakt",
@@ -5532,528 +5552,347 @@ def run_generator():
             "dir": "ltr", "current_svc": "Aktueller Service", "more_qs": "Weitere Fragen? Rufen Sie an!",
             "rated": "Am besten bewertet in", "areas_served_in": "Unsere Einzugsgebiete in",
             "submit_btn": "Angebot Einholen", "service_ph": "Service Auswählen",
-            "name_ph": "Name", "phone_ph": "Telefon", "other_services": "Andere Dienstleistungen"
+            "name_ph": "Name", "phone_ph": "Telefon", "other_services": "Andere Dienstleistungen",
+            "whatsapp": "WhatsApp", "get_in_touch": "Kontaktieren Sie uns"
         }
     }
-    
-    ui_translations = UI_DICT.get(lang_input, UI_DICT["en"])
-    
-    phone = input("Phone Number: ").strip() or "+1234567890"
+    ui_translations = UI_DICT[lang_input]
+    is_rtl = (ui_translations.get("dir") == "rtl")
+    print(f"✅ Language: {lang_input.upper()} ({'RTL' if is_rtl else 'LTR'})")
+
+    # ── BUSINESS INPUTS ───────────────────────────────────────────────────────
+    name     = cfg.get("business_name", "Global Services").strip() or "Global Services"
+    industry = cfg.get("industry", "General").strip() or "General"
+    country  = cfg.get("country", "UAE").strip()
+    state    = cfg.get("state", "").strip()
+    city     = cfg.get("city", "").strip() or "Major Cities"
+    phone    = cfg.get("phone", "+971501234567").strip()
     clean_phone = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace("+", "")
-    
-    print("\n🌐 SOCIAL MEDIA LINKS (Press Enter to skip)")
-    facebook = input("Facebook URL: ").strip() or "#"
-    twitter = input("Twitter URL: ").strip() or "#"
-    instagram = input("Instagram URL: ").strip() or "#"
-    linkedin = input("LinkedIn URL: ").strip() or "#"
-    youtube = input("YouTube URL: ").strip() or "#"
-    
-    print("\n⚙️ STRUCTURE MODE")
-    print("1. Content Injector (Add content to existing page)")
-    print("2. Hub Mode (Child pages under existing page)")
-    print("3. Full Website with AI Hierarchy")
-    mode_input = input("Enter Mode [3]: ").strip() or "3"
+    print(f"✅ Business: {name} | {industry} | {city}, {country}")
 
-    print("\n🖼️ IMAGE GENERATION MODEL")
-    print("1. Hybrid (Recommended) - GPT-Image-2 for Logo, Flux for Photos")
-    print("2. All OpenAI - GPT-Image-2 for everything (Slower, good for illustrations)")
-    print("3. All Replicate - Flux for everything (Faster, photorealistic)")
-    img_choice = input("Select Image Model [1]: ").strip() or "1"
-    # 💎 STRICTLY UPDATING IMAGE_MODEL TO PREVENT DALL-E 3 EXPENSES IF OPTION 3 IS SELECTED
+    # ── SOCIAL LINKS ──────────────────────────────────────────────────────────
+    facebook  = cfg.get("facebook",  "#")
+    twitter   = cfg.get("twitter",   "#")
+    instagram = cfg.get("instagram", "#")
+    linkedin  = cfg.get("linkedin",  "#")
+    youtube   = cfg.get("youtube",   "#")
+
+    # ── MODE ──────────────────────────────────────────────────────────────────
+    mode_input = str(cfg.get("mode", "3")).strip()
+    print(f"✅ Mode: {mode_input}")
+
+    # ── IMAGE MODEL ───────────────────────────────────────────────────────────
+    img_choice = str(cfg.get("image_model", "1")).strip()
     if img_choice == "2":
-        Config.IMAGE_MODEL = "openai"
-        Config.LOGO_MODEL = "openai"
-        Config.PHOTO_MODEL = "openai"
+        Config.IMAGE_MODEL, Config.LOGO_MODEL, Config.PHOTO_MODEL = "openai", "openai", "openai"
     elif img_choice == "3":
-        Config.IMAGE_MODEL = "replicate"
-        Config.LOGO_MODEL = "replicate"
-        Config.PHOTO_MODEL = "replicate"
+        Config.IMAGE_MODEL, Config.LOGO_MODEL, Config.PHOTO_MODEL = "replicate", "replicate", "replicate"
     else:
-        Config.IMAGE_MODEL = "hybrid"
-        Config.LOGO_MODEL = "openai"
-        Config.PHOTO_MODEL = "replicate"
+        Config.IMAGE_MODEL, Config.LOGO_MODEL, Config.PHOTO_MODEL = "hybrid", "openai", "replicate"
+    print(f"✅ Image Model: {Config.IMAGE_MODEL.upper()}")
 
-    # ==============================================================================
-    # 🟢 THE FIX: ADDING LINKING PROMPTS HERE
-    # ==============================================================================
-    print("\n🔗 SEO & LINKING SETTINGS")
-    
-    # Internal Links Prompt
-    int_links = input("Generate Internal Links between pages? (y/n) [y]: ").strip().lower()
-    if int_links == 'n':
-        Config.GENERATE_INTERNAL_LINKS = False
-        print("   ℹ️ Internal linking DISABLED.")
-    else:
-        Config.GENERATE_INTERNAL_LINKS = True
-        print("   ✅ Internal linking ENABLED.")
-        
-    # Backlinks Prompt
-    ext_links = input("Generate external Backlinks (Dev.to & Blogger)? (y/n) [y]: ").strip().lower()
-    if ext_links == 'n':
-        Config.GENERATE_BACKLINKS = False
-        print("   ℹ️ External backlink generation DISABLED.")
-    else:
-        Config.GENERATE_BACKLINKS = True
-        print("   ✅ External backlink generation ENABLED.")
-    # ==============================================================================
+    # ── LINKING SETTINGS ──────────────────────────────────────────────────────
+    Config.GENERATE_INTERNAL_LINKS = cfg.get("internal_links", "yes").strip().lower() in ["yes", "y", ""]
+    Config.GENERATE_BACKLINKS      = cfg.get("backlinks", "no").strip().lower() in ["yes", "y"]
+    print(f"✅ Internal Links: {Config.GENERATE_INTERNAL_LINKS} | Backlinks: {Config.GENERATE_BACKLINKS}")
 
-    wp_conf = {
-        "url": Config.WP_URL,
-        "user": Config.WP_USER,
-        "pass": Config.WP_APP_PASSWORD
-    }
-    
+    # ── AI BRAND COLORS ───────────────────────────────────────────────────────
     colors = {"primary": "#1e40af", "secondary": "#0f766e", "accent": "#16a34a"}
-    if CLIENTS['openai']:
+    ai_colors = call_claude_json(
+        f"Generate 3 VIBRANT, high-contrast hex colors for a {industry} business. "
+        f"Return JSON with keys: primary, secondary, accent."
+    )
+    if not ai_colors and CLIENTS.get('openai'):
         try:
             c_resp = CLIENTS['openai'].chat.completions.create(
                 model=Config.MODEL_LOW_TIER,
-                messages=[{"role": "user", "content": f"Generate 3 VIBRANT, high-contrast, bright hex colors for a {industry} business. Return JSON with keys: primary, secondary, accent."}],
-                response_format={"type": "json_object"},
-                temperature=0.3
+                messages=[{"role": "user", "content": f"Generate 3 VIBRANT hex colors for a {industry} business. Return JSON keys: primary, secondary, accent."}],
+                response_format={"type": "json_object"}, temperature=0.3
             )
             ai_colors = clean_json_response(c_resp.choices[0].message.content)
-            if ai_colors:
-                colors.update(ai_colors)
-                print(f"   🎨 Colors: {colors}")
         except Exception as e:
             print(f"   ⚠️ Color Error: {e}")
-    
-    # 🟢 THE FIX: ONLY generate a logo if we are building a full site (Mode 3)
+    if ai_colors and isinstance(ai_colors, dict):
+        colors.update(ai_colors)
+    print(f"   🎨 Colors: {colors}")
+
+    # ── LOGO (sirf Mode 3) ────────────────────────────────────────────────────
     logo_url = ""
     if mode_input == "3":
         print("\n🖼️ Generating Business Logo...")
-        logo_url = generate_logo({"name": name, "industry": industry, "city": city, "country": country})
+        logo_url = generate_logo({"name": name, "industry": industry, "city": city,
+                                  "country": country, "primary": colors['primary'],
+                                  "accent": colors['accent']}) or ""
     else:
         print("\nℹ️ Skipping Logo Generation (Not in Full Website Mode)")
-        # If they already have a logo on their site, we can just use a blank string 
-        # so the header builder defaults to text-only mode for the injected pages.
-        logo_url = ""
 
+    # ── B_DATA ────────────────────────────────────────────────────────────────
     b_data = {
-        "name": name,
-        "city": city,
-        "state": state,
-        "country": country,
-        "industry": industry,
-        "phone": phone,
-        "whatsapp": clean_phone,
-        "primary": colors['primary'],
-        "secondary": colors['secondary'],
-        "accent": colors['accent'],
+        "name": name, "city": city, "state": state, "country": country,
+        "industry": industry, "phone": phone, "whatsapp": clean_phone,
+        "primary": colors['primary'], "secondary": colors['secondary'], "accent": colors['accent'],
         "mode": mode_input,
         "domain": name.lower().replace(' ', '') + '.com',
         "google_sheet_url": Config.GOOGLE_SHEET_URL,
         "flat_services_list": [],
-        "logo_url": logo_url, # Will be the generated URL or empty string
-        "facebook": facebook,
-        "twitter": twitter,
-        "instagram": instagram,
-        "linkedin": linkedin,
-        "youtube": youtube,
+        "logo_url": logo_url,
+        "facebook": facebook, "twitter": twitter, "instagram": instagram,
+        "linkedin": linkedin, "youtube": youtube,
         "ui": ui_translations,
         "target_lang": lang_input,
-        "is_rtl": (ui_translations.get('dir') == 'rtl'),
-        "lang_mode": "no",
+        "is_rtl": is_rtl,
+        "lang_mode": lang_input,
         "generated_pages": []
     }
-    
-    if b_data['is_rtl']:
-        print(f"   📝 RTL mode enabled for Arabic")
-        print(f"   🌐 Language: Arabic (RTL)")
-    else:
-        print(f"   🌐 Language: {lang_input.upper()} (LTR)")
-    
+
+    # ── 🛑 LANGUAGE ROUTING (Menu links ↔ Published slugs PERFECT MATCH) ──────
     Config.SERVICE_BASE_PATH = "/"
-    
-    # 🛑 THE ROUTING FIX: This ensures Menu Links and Published Slugs match perfectly
     lang_slug_prefix = f"{lang_input}-" if lang_input != "en" else ""
-    
-    # We update the global prefix so the validate_url function builds matching menu links
     if lang_input != "en":
-        Config.LANG_PREFIX = f"/{lang_input}-"
-        # We strip the trailing slash off the prefix so it cleanly attaches to slugs (e.g., /es-about)
-        Config.LANG_PREFIX = Config.LANG_PREFIX.rstrip('/') 
+        Config.LANG_PREFIX = f"/{lang_input}-".rstrip('/')
     else:
         Config.LANG_PREFIX = ""
-    
+
+    # ==========================================================================
+    # MODE 1 — CONTENT INJECTOR
+    # ==========================================================================
     if mode_input == "1":
         print("\n💉 MODE 1: CONTENT INJECTOR")
-        target_id = input("Enter Page ID to inject content into: ").strip()
-        if not target_id.isdigit(): return
-        
+        target_id = str(cfg.get("target_page_id", "")).strip()
+        if not target_id.isdigit():
+            print("❌ config.json me 'target_page_id' (number) zaroori hai for Mode 1.")
+            sys.exit(1)
+
         existing_page = get_existing_page_content(target_id, wp_conf)
-        if not existing_page: return
+        if not existing_page:
+            print("❌ Target page nahi mili — Page ID check karein.")
+            sys.exit(1)
         print(f"   ✅ Found: {existing_page['title']}")
-        
-        service_name = input("Enter service name for this page: ").strip() or existing_page['title']
+
+        service_name = cfg.get("main_service", "").strip() or existing_page['title']
         b_data['flat_services_list'] = [service_name]
-        
-        # 💎 NEW: Generate sub-services so the AI has items to build Grids & Zigzags!
+
         print(f"   🧠 Generating sub-services for Grid/Zigzag layout...")
         mode_1_siblings = generate_sub_services(b_data, service_name)
-        
+
         content_data = generate_page_content(b_data, "child", service_name)
         if content_data:
-            # 💎 NEW: Explicitly pass page_type and siblings so the layout doesn't skip!
             page_content = assemble_enhanced_page_without_header(
-                b_data, 
-                content_data, 
-                page_type="child", 
-                service_name=service_name, 
-                siblings=mode_1_siblings
+                b_data, content_data, page_type="child",
+                service_name=service_name, siblings=mode_1_siblings
             )
-            
-            schema = generate_hierarchical_schema(b_data, content_data, service_name, f"{wp_conf['url'].rstrip('/')}/{lang_slug_prefix}{slugify(service_name)}/")
+            schema = generate_hierarchical_schema(
+                b_data, content_data, service_name,
+                f"{wp_conf['url'].rstrip('/')}/{lang_slug_prefix}{slugify(service_name)}/"
+            )
             page_content += f'\n<script type="application/ld+json">{schema}</script>'
-            
-            meta_html = f'<meta name="description" content="{content_data.get("meta_description", "")}">\n'
+
+            meta_html  = f'<meta name="description" content="{content_data.get("meta_description", "")}">\n'
             meta_html += f'<meta name="keywords" content="{content_data.get("meta_keywords", "")}">\n'
             final_content = existing_page['content'] + "\n" + meta_html + page_content
-            
-            publish_to_wp_without_header(existing_page['title'], existing_page['slug'], final_content,
-                         wp_conf=wp_conf, update_id=int(target_id), meta_data=content_data)
+
+            publish_to_wp_without_header(existing_page['title'], existing_page['slug'],
+                                         final_content, wp_conf=wp_conf,
+                                         update_id=int(target_id), meta_data=content_data)
+
+    # ==========================================================================
+    # MODE 2 — HUB MODE
+    # ==========================================================================
     elif mode_input == "2":
-        print("\n🔗 HUB MODE")
-        entered_id = input("Enter WordPress Page ID for HUB (Parent): ").strip()
+        print("\n🔗 MODE 2: HUB MODE")
+        entered_id  = str(cfg.get("hub_page_id", "")).strip()
         hub_page_id = int(entered_id) if entered_id.isdigit() else 0
-        
-        # 🟢 THE FIX: Fetch the Hub Page to get its actual slug for internal URL linking
+
         if hub_page_id != 0:
             hub_page = get_existing_page_content(hub_page_id, wp_conf)
             if hub_page:
-                # Set the base path dynamically so validate_url() makes perfect child links!
                 Config.SERVICE_BASE_PATH = f"/{hub_page['slug']}/"
                 print(f"   ✅ Base path dynamically set to: {Config.SERVICE_BASE_PATH}")
 
-        inp = input("\nEnter Services (comma separated): ").strip()
-        services_list = [s.strip() for s in inp.split(',')] if inp else []
+        inp = cfg.get("sub_services", "").strip()
+        services_list = [s.strip() for s in inp.split(',') if s.strip()]
+        if not services_list:
+            print("❌ config.json me 'sub_services' (comma separated) zaroori hai for Mode 2.")
+            sys.exit(1)
         b_data['flat_services_list'] = services_list
-        
+
         for service in services_list:
             print(f"\n📄 Generating: {service}...")
             hero_img = get_hosted_image(service, "hero", industry, service_name=service)
             content_data = generate_page_content(b_data, "child", service)
+            wp_id = 0
             if content_data:
                 siblings = [s for s in services_list if s != service]
-                page_content = assemble_enhanced_page_without_header(b_data, content_data, service, siblings=siblings, pre_generated_img=hero_img)
+                page_content = assemble_enhanced_page_without_header(
+                    b_data, content_data, page_type="child", service_name=service,
+                    siblings=siblings, pre_generated_img=hero_img
+                )
                 safe_url = f"{wp_conf['url'].rstrip('/')}{validate_url('service', service, mode_input)}"
                 schema = generate_hierarchical_schema(b_data, content_data, service, safe_url)
                 page_content += f'\n<script type="application/ld+json">{schema}</script>'
-                
-                # 🟢 THE FIX: Pass hub_page_id so it physically nests under the parent in WP
+
                 wp_id = publish_to_wp_without_header(
-                    clean_title(service), 
-                    f"{lang_slug_prefix}{slugify(service)}", 
-                    page_content,
-                    parent_id=hub_page_id, # 👈 Tells WP to make this a literal Child Page!
-                    wp_conf=wp_conf, 
-                    meta_data=content_data
-                ) 
-                
-            if wp_id and Config.GENERATE_BACKLINKS and hero_img:
-                live_link = f"{wp_conf['url'].rstrip('/')}/{lang_slug_prefix}{slugify(service)}/"
-                social_desc = content_data.get('intro', '')[:300]
-                BacklinkManager.create_devto_post(f"Expert Guide: {clean_title(service)}", social_desc, hero_img, live_link)
-                BacklinkManager.create_blogger_post(f"New Guide: {clean_title(service)}", social_desc, hero_img, live_link)
+                    clean_title(service), f"{lang_slug_prefix}{slugify(service)}",
+                    page_content, parent_id=hub_page_id, wp_conf=wp_conf, meta_data=content_data
+                )
+
+                if wp_id and Config.GENERATE_BACKLINKS and hero_img:
+                    live_link = safe_url
+                    social_desc = content_data.get('intro', '')[:300]
+                    BacklinkManager.create_devto_post(f"Expert Guide: {clean_title(service)}", social_desc, hero_img, live_link)
+                    BacklinkManager.create_blogger_post(f"New Guide: {clean_title(service)}", social_desc, hero_img, live_link)
             time.sleep(Config.API_DELAY)
+
+    # ==========================================================================
+    # MODE 3 — FULL WEBSITE
+    # ==========================================================================
     elif mode_input == "3":
-        print("\n📋 Enter URLs or Service List (Type 'DONE' on new line):")
-        lines = []
-        while True:
-            try:
-                line = input()
-                if line.strip().upper() == 'DONE': break
-                if line.strip(): lines.append(line.strip())
-            except EOFError: break
-        
-        if lines:
-            if len(lines) == 1 and ',' in lines[0]:
-                lines = [s.strip() for s in lines[0].split(',') if s.strip()]
-            
-            unique_lines = list(set(lines))
-            raw_input = "\n".join(unique_lines)
-            
-            if any('http://' in line or 'https://' in line for line in lines):
-                structure = analyze_structure_with_ai(raw_input, target_lang=lang_input, mode="urls")
-            else:
-                structure = analyze_structure_with_ai(raw_input, target_lang=lang_input, mode="services")
-            flat = []
-            for k, v in structure.items():
-                if isinstance(v, dict) and 'children' in v:
-                    flat.extend(v['children'])
-            b_data['flat_services_list'] = list(set(flat))
-            
-            print(f"\n🏠 Generating Homepage...")
-            home_content = generate_page_content(b_data, "home")
-            if home_content:
-                home_html = assemble_enhanced_page_without_header(b_data, home_content, "home", "Home", structure=structure)
-                schema = generate_hierarchical_schema(b_data, home_content, "Home", wp_conf['url'])
-                home_html += f'\n<script type="application/ld+json">{schema}</script>'
-                
-                # 🛑 FIXED ROUTING: Home page slug
-                home_slug = f"{lang_slug_prefix}home" if lang_slug_prefix else "home"
-                publish_to_wp_without_header("Home", home_slug, home_html, wp_conf=wp_conf, meta_data=home_content)
-            
-            for category, data in structure.items():
-                if not isinstance(data, dict): continue
-                
-                print(f"\n📂 Generating Category: {category}...")
-                cat_content = generate_page_content(b_data, "parent", category, sub_services=data.get('children', []))
-                if cat_content:
-                    cat_html = assemble_enhanced_page_without_header(b_data, cat_content, "parent", category, siblings=data.get('children', []), structure=structure)
-                    
-                    # 💎 SEO FIX: Use validate_url so schema matches website exactly (No "categories/" folder)
-                    cat_full_url = f"{wp_conf['url'].rstrip('/')}{validate_url('category', category, mode_input)}"
-                    schema = generate_hierarchical_schema(b_data, cat_content, category, cat_full_url)
-                    cat_html += f'\n<script type="application/ld+json">{schema}</script>'
-                    
-                    # 🛑 FIXED ROUTING: Removed "categories-" to keep URLs clean and hierarchical
-                    cat_slug = f"{lang_slug_prefix}{slugify(category)}"
-                    parent_id = publish_to_wp_without_header(clean_title(category), cat_slug, cat_html, wp_conf=wp_conf, meta_data=cat_content)
-                    
-                    for service in data.get('children', []):
-                        print(f"   📄 Generating: {service}...")
-                        hero_img = get_hosted_image(service, "hero", industry, service_name=service)
-                        rel = get_service_relationships(service)
-                        child_content = generate_page_content(b_data, "child", service, parent_service=category,
-                                                              sibling_services=rel.get('siblings', []),
-                                                              child_services=rel.get('children', []))
-                        if child_content:
-                            child_html = assemble_enhanced_page_without_header(b_data, child_content, "child", service,
-                                                                               siblings=rel.get('siblings', []),
-                                                                               parent_category=category,
-                                                                               pre_generated_img=hero_img,
-                                                                               structure=structure)
-                            
-                            # 💎 SEO FIX: Enforce validation to match WP nesting perfectly
-                            child_full_url = f"{wp_conf['url'].rstrip('/')}{validate_url('service', service, mode_input)}"
-                            schema = generate_hierarchical_schema(b_data, child_content, service,
-                                                                  child_full_url,
-                                                                  parent_category=category,
-                                                                  is_child_page=True,
-                                                                  parent_url=cat_full_url)
-                            child_html += f'\n<script type="application/ld+json">{schema}</script>'
-                            
-                            # 🛑 CRITICAL ROUTING FIX: WP automatically prepends the parent's slug to the URL.
-                            # Since the parent category already has the language prefix (e.g., 'es-category'), 
-                            # the child slug MUST NOT have the language prefix again. 
-                            # This ensures WP generates '/es-category/service/' instead of '/es-category/es-service/',
-                            # matching your validate_url perfectly.
-                            service_slug = slugify(service)
-                            
-                            wp_id = publish_to_wp_without_header(clean_title(service), service_slug, child_html,
-                                                                 parent_id=parent_id, wp_conf=wp_conf, meta_data=child_content)
-                            
-                            if wp_id and Config.GENERATE_BACKLINKS and hero_img:
-                                # 💎 LINK FIX: Use the fully validated URL for backlinks
-                                live_link = child_full_url
-                                social_desc = child_content.get('intro', '')[:300]
-                                BacklinkManager.create_devto_post(f"Expert Guide: {clean_title(service)}", social_desc, hero_img, live_link)
-                                BacklinkManager.create_blogger_post(f"New Guide: {clean_title(service)}", social_desc, hero_img, live_link)
-                            time.sleep(Config.API_DELAY)
-            # EXPORT WIDGETS AT THE VERY END TO PREVENT MID-RUN CRASHES (Error 10054 Fix)
-            print("\n" + "=" * 60)
-            print("🍔 GENERATING WIDGET CODES (MENU, FOOTER & CSS)")
-            print("=" * 60)
-            export_mega_menu_as_page(wp_conf, b_data, structure, mode_input)
-            export_footer_as_page(wp_conf, b_data, structure)
-            export_global_css_as_page(wp_conf, b_data)
+        print("\n🏗️ MODE 3: FULL WEBSITE")
+        raw_svc = cfg.get("services_mode3", "").strip()
+        lines   = [s.strip() for s in raw_svc.split(",") if s.strip()]
+        if not lines:
+            print("❌ config.json me 'services_mode3' (comma separated) zaroori hai for Mode 3.")
+            sys.exit(1)
 
-    # ==============================================================================
-    # 📞 CORE PAGES BUILDER (MODE 3 ONLY)
-    # ==============================================================================
-    if mode_input == "3":
-        print(f"\n📄 Generating Contact Page...")
-        
-        target_lang = b_data.get('target_lang', 'en')
-        dir_attr = get_language_direction(target_lang)
+        unique_lines = list(set(lines))
+        raw_in = "\n".join(unique_lines)
+        in_mode = "urls" if any('http' in l for l in unique_lines) else "services"
+        structure = analyze_structure_with_ai(raw_in, target_lang=lang_input, mode=in_mode)
+
+        flat_ai = []
+        for k, v in structure.items():
+            if isinstance(v, dict) and "children" in v:
+                flat_ai.extend(v["children"])
+        orig_lower = {s.lower(): s for s in unique_lines if 'http' not in s}
+        ai_lower   = [s.lower() for s in flat_ai]
+        missing    = [orig_lower[k] for k in orig_lower if k not in ai_lower]
+        if missing:
+            cats = list(structure.keys()) or ["General Services"]
+            for i, item in enumerate(missing):
+                cat = cats[i % len(cats)]
+                if isinstance(structure.get(cat), dict):
+                    structure[cat].setdefault("children", []).append(item)
+
+        flat = []
+        for k, v in structure.items():
+            if isinstance(v, dict) and 'children' in v:
+                flat.extend(v['children'])
+        b_data['flat_services_list'] = list(set(flat))
+        print(f"✅ {len(structure)} categories | {len(b_data['flat_services_list'])} services")
+
+        # ── HOMEPAGE ──────────────────────────────────────────────────────────
+        print(f"\n🏠 Generating Homepage...")
+        home_content = generate_page_content(b_data, "home")
+        if home_content:
+            home_html = assemble_enhanced_page_without_header(b_data, home_content, "home", "Home", structure=structure)
+            schema = generate_hierarchical_schema(b_data, home_content, "Home", wp_conf['url'])
+            home_html += f'\n<script type="application/ld+json">{schema}</script>'
+            home_slug = f"{lang_slug_prefix}home" if lang_slug_prefix else "home"
+            publish_to_wp_without_header("Home", home_slug, home_html, wp_conf=wp_conf, meta_data=home_content)
+
+        # ── CATEGORIES + CHILD SERVICES ───────────────────────────────────────
+        for category, data in structure.items():
+            if not isinstance(data, dict):
+                continue
+            print(f"\n📂 Generating Category: {category}...")
+            cat_content = generate_page_content(b_data, "parent", category, sub_services=data.get('children', []))
+            if not cat_content:
+                continue
+            cat_html = assemble_enhanced_page_without_header(b_data, cat_content, "parent", category,
+                                                             siblings=data.get('children', []), structure=structure)
+            cat_full_url = f"{wp_conf['url'].rstrip('/')}{validate_url('category', category, mode_input)}"
+            schema = generate_hierarchical_schema(b_data, cat_content, category, cat_full_url)
+            cat_html += f'\n<script type="application/ld+json">{schema}</script>'
+
+            cat_slug  = f"{lang_slug_prefix}{slugify(category)}"
+            parent_id = publish_to_wp_without_header(clean_title(category), cat_slug, cat_html,
+                                                     wp_conf=wp_conf, meta_data=cat_content)
+
+            for service in data.get('children', []):
+                print(f"   📄 Generating: {service}...")
+                hero_img = get_hosted_image(service, "hero", industry, service_name=service)
+                rel = get_service_relationships(service)
+                child_content = generate_page_content(b_data, "child", service, parent_service=category,
+                                                      sibling_services=rel.get('siblings', []),
+                                                      child_services=rel.get('children', []))
+                if child_content:
+                    child_html = assemble_enhanced_page_without_header(b_data, child_content, "child", service,
+                                                                       siblings=rel.get('siblings', []),
+                                                                       parent_category=category,
+                                                                       pre_generated_img=hero_img,
+                                                                       structure=structure)
+                    child_full_url = f"{wp_conf['url'].rstrip('/')}{validate_url('service', service, mode_input)}"
+                    schema = generate_hierarchical_schema(b_data, child_content, service, child_full_url,
+                                                          parent_category=category, is_child_page=True,
+                                                          parent_url=cat_full_url)
+                    child_html += f'\n<script type="application/ld+json">{schema}</script>'
+
+                    service_slug = slugify(service)
+                    wp_id = publish_to_wp_without_header(clean_title(service), service_slug, child_html,
+                                                         parent_id=parent_id, wp_conf=wp_conf,
+                                                         meta_data=child_content)
+
+                    if wp_id and Config.GENERATE_BACKLINKS and hero_img:
+                        social_desc = child_content.get('intro', '')[:300]
+                        BacklinkManager.create_devto_post(f"Expert Guide: {clean_title(service)}", social_desc, hero_img, child_full_url)
+                        BacklinkManager.create_blogger_post(f"New Guide: {clean_title(service)}", social_desc, hero_img, child_full_url)
+                    time.sleep(Config.API_DELAY)
+
+        # ── WIDGET EXPORTS ─────────────────────────────────────────────────
+        print("\n" + "=" * 60)
+        print("🍔 GENERATING WIDGET CODES (MENU, FOOTER & CSS)")
+        print("=" * 60)
+        export_mega_menu_as_page(wp_conf, b_data, structure, mode_input)
+        export_footer_as_page(wp_conf, b_data, structure)
+        export_global_css_as_page(wp_conf, b_data)
+
+        # ── CORE PAGES (Contact / About / Blog) — 5-language titles ──────────
+        target_lang = lang_input
+        dir_attr  = get_language_direction(target_lang)
         lang_code = target_lang[:2]
-        
-        # 🌍 MULTI-LANGUAGE TITLES FOR CONTACT & BLOG PAGES
-        if target_lang == 'ar':
-            contact_title = "اتصل بنا"
-            blog_title = "المدونة"
-        elif target_lang == 'es':
-            contact_title = "Contacto"
-            blog_title = "Blog"
-        elif target_lang == 'fr':
-            contact_title = "Contact"
-            blog_title = "Blog"
-        elif target_lang == 'de':
-            contact_title = "Kontakt"
-            blog_title = "Blog"
-        else:
-            contact_title = "Contact Us"
-            blog_title = "Blog"
 
-        # 💎 CSS FIX: Fetch CSS and combine with HTML
-        contact_css = get_enterprise_css(b_data)
-        contact_raw_html = build_contact_html(b_data)
-        contact_content = f"{contact_css}\n{contact_raw_html}"
-        
-        # 💎 URL FIX: Safely stripped trailing slash from WP_URL to prevent double slashes.
-        # PERFECT SYNC: Uses lang_slug_prefix to perfectly match validate_url() in Mega Menu
+        core_titles = {
+            "en": ("Contact Us", "About Us", "Blog"),
+            "ar": ("اتصل بنا", "من نحن", "المدونة"),
+            "es": ("Contacto", "Sobre Nosotros", "Blog"),
+            "fr": ("Contact", "À Propos", "Blog"),
+            "de": ("Kontakt", "Über Uns", "Blog"),
+        }
+        contact_title, about_title, blog_title = core_titles.get(target_lang, core_titles["en"])
+
+        print(f"\n📄 Generating Contact Page...")
+        contact_content = f"{get_enterprise_css(b_data)}\n{build_contact_html(b_data)}"
         safe_contact_url = f"{wp_conf['url'].rstrip('/')}/{lang_slug_prefix}contact/"
-        contact_schema = generate_hierarchical_schema(b_data, {}, contact_title, safe_contact_url)
-        contact_content += f'\n<script type="application/ld+json">{contact_schema}</script>'
-        
+        contact_content += f'\n<script type="application/ld+json">{generate_hierarchical_schema(b_data, {}, contact_title, safe_contact_url)}</script>'
         publish_to_wp_without_header(contact_title, f"{lang_slug_prefix}contact", contact_content, wp_conf=wp_conf)
-        
-        # ==============================================================================
-        # 📝 ABOUT PAGE BUILDER
-        # ==============================================================================
+
         print(f"\n📄 Generating About Page...")
-        
-        # 🌍 MULTI-LANGUAGE TITLES FOR ABOUT PAGE
-        if target_lang == 'ar':
-            page_name = "من نحن"
-        elif target_lang == 'es':
-            page_name = "Sobre Nosotros"
-        elif target_lang == 'fr':
-            page_name = "À Propos"
-        elif target_lang == 'de':
-            page_name = "Über Uns"
-        else:
-            page_name = "About Us"
-
-        # 💎 LOGIC FIX: Calls your rich build_about_html function instead of hardcoding text
-        about_css = get_enterprise_css(b_data)
-        about_raw_html = build_about_html(b_data)
-        about_content = f"{about_css}\n{about_raw_html}"
-        
-        # 💎 URL FIX: PERFECT SYNC with Mega Menu using lang_slug_prefix
+        about_content = f"{get_enterprise_css(b_data)}\n{build_about_html(b_data)}"
         safe_about_url = f"{wp_conf['url'].rstrip('/')}/{lang_slug_prefix}about/"
-        about_schema = generate_hierarchical_schema(b_data, {}, page_name, safe_about_url)
-        about_content += f'\n<script type="application/ld+json">{about_schema}</script>'
-        
-        publish_to_wp_without_header(page_name, f"{lang_slug_prefix}about", about_content, wp_conf=wp_conf)
+        about_content += f'\n<script type="application/ld+json">{generate_hierarchical_schema(b_data, {}, about_title, safe_about_url)}</script>'
+        publish_to_wp_without_header(about_title, f"{lang_slug_prefix}about", about_content, wp_conf=wp_conf)
 
-        # ==============================================================================
-        # 📝 BLOG PAGE BUILDER (PERFECTED WITH CSS)
-        # ==============================================================================
         print(f"\n📄 Generating Blog Page...")
-        
-        blog_css = get_enterprise_css(b_data)
         blog_html = build_blog_page_html(b_data, wp_conf['url'])
-        
         full_blog_content = f'''
-        {blog_css}
+        {get_enterprise_css(b_data)}
         <div id="v360-wrapper" dir="{dir_attr}" class="lang-{lang_code}">
             {blog_html}
         </div>
         '''
-        
-        # 💎 URL FIX: PERFECT SYNC with Mega Menu using lang_slug_prefix
         safe_blog_url = f"{wp_conf['url'].rstrip('/')}/{lang_slug_prefix}blog/"
-        blog_schema = generate_hierarchical_schema(b_data, {}, blog_title, safe_blog_url)
-        full_blog_content += f'\n<script type="application/ld+json">{blog_schema}</script>'
-        
+        full_blog_content += f'\n<script type="application/ld+json">{generate_hierarchical_schema(b_data, {}, blog_title, safe_blog_url)}</script>'
         publish_to_wp_without_header(blog_title, f"{lang_slug_prefix}blog", full_blog_content, wp_conf=wp_conf)
-    # ==============================================================================
-    # 📞 CORE PAGES BUILDER (MODE 3 ONLY)
-    # ==============================================================================
-    if mode_input == "3":
-        print(f"\n📄 Generating Contact Page...")
-        
-        target_lang = b_data.get('target_lang', 'en')
-        dir_attr = get_language_direction(target_lang)
-        lang_code = target_lang[:2]
-        
-        # 🌍 MULTI-LANGUAGE TITLES FOR CONTACT & BLOG PAGES
-        if target_lang == 'ar':
-            contact_title = "اتصل بنا"
-            blog_title = "المدونة"
-        elif target_lang == 'es':
-            contact_title = "Contacto"
-            blog_title = "Blog"
-        elif target_lang == 'fr':
-            contact_title = "Contact"
-            blog_title = "Blog"
-        elif target_lang == 'de':
-            contact_title = "Kontakt"
-            blog_title = "Blog"
-        else:
-            contact_title = "Contact Us"
-            blog_title = "Blog"
 
-        # 💎 CSS FIX: Fetch CSS and combine with HTML
-        contact_css = get_enterprise_css(b_data)
-        contact_raw_html = build_contact_html(b_data)
-        contact_content = f"{contact_css}\n{contact_raw_html}"
-        
-        # 💎 URL FIX: Safely stripped trailing slash from WP_URL to prevent double slashes.
-        # PERFECT SYNC: Uses lang_slug_prefix to perfectly match validate_url() in Mega Menu
-        safe_contact_url = f"{wp_conf['url'].rstrip('/')}/{lang_slug_prefix}contact/"
-        contact_schema = generate_hierarchical_schema(b_data, {}, contact_title, safe_contact_url)
-        contact_content += f'\n<script type="application/ld+json">{contact_schema}</script>'
-        
-        publish_to_wp_without_header(contact_title, f"{lang_slug_prefix}contact", contact_content, wp_conf=wp_conf)
-        
-        # ==============================================================================
-        # 📝 ABOUT PAGE BUILDER
-        # ==============================================================================
-        print(f"\n📄 Generating About Page...")
-        
-        # 🌍 MULTI-LANGUAGE TITLES FOR ABOUT PAGE
-        if target_lang == 'ar':
-            page_name = "من نحن"
-        elif target_lang == 'es':
-            page_name = "Sobre Nosotros"
-        elif target_lang == 'fr':
-            page_name = "À Propos"
-        elif target_lang == 'de':
-            page_name = "Über Uns"
-        else:
-            page_name = "About Us"
-
-        # 💎 LOGIC FIX: Calls your rich build_about_html function instead of hardcoding text
-        about_css = get_enterprise_css(b_data)
-        about_raw_html = build_about_html(b_data)
-        about_content = f"{about_css}\n{about_raw_html}"
-        
-        # 💎 URL FIX: PERFECT SYNC with Mega Menu using lang_slug_prefix
-        safe_about_url = f"{wp_conf['url'].rstrip('/')}/{lang_slug_prefix}about/"
-        about_schema = generate_hierarchical_schema(b_data, {}, page_name, safe_about_url)
-        about_content += f'\n<script type="application/ld+json">{about_schema}</script>'
-        
-        publish_to_wp_without_header(page_name, f"{lang_slug_prefix}about", about_content, wp_conf=wp_conf)
-
-        # ==============================================================================
-        # 📝 BLOG PAGE BUILDER (PERFECTED WITH CSS)
-        # ==============================================================================
-        print(f"\n📄 Generating Blog Page...")
-        
-        blog_css = get_enterprise_css(b_data)
-        blog_html = build_blog_page_html(b_data, wp_conf['url'])
-        
-        full_blog_content = f'''
-        {blog_css}
-        <div id="v360-wrapper" dir="{dir_attr}" class="lang-{lang_code}">
-            {blog_html}
-        </div>
-        '''
-        
-        # 💎 URL FIX: PERFECT SYNC with Mega Menu using lang_slug_prefix
-        safe_blog_url = f"{wp_conf['url'].rstrip('/')}/{lang_slug_prefix}blog/"
-        blog_schema = generate_hierarchical_schema(b_data, {}, blog_title, safe_blog_url)
-        full_blog_content += f'\n<script type="application/ld+json">{blog_schema}</script>'
-        
-        publish_to_wp_without_header(blog_title, f"{lang_slug_prefix}blog", full_blog_content, wp_conf=wp_conf)
-    # SCRIPT COMPLETION
-    # ==============================================================================
+    # ── DONE ──────────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print(" ✅ WORDPRESS SITE GENERATION COMPLETE!")
     print(" 🌐 Website: " + wp_conf['url'])
     print("\n 🍔 NEXT STEPS:")
-    print(" 1. Go to WordPress Admin → Pages → Find 'Mega Menu Code (Copy This)' and 'Footer Code (Copy This)'")
-    print(" 2. Copy the HTML code from those pages")
-    print(" 3. Go to Appearance → Widgets")
-    print(" 4. Add a 'Custom HTML' widget to your header and footer areas")
-    print(" 5. Paste the code and save")
-    print(" 6. Your mega menu and footer will now appear on ALL pages flawlessly!")
+    print(" 1. WP Admin → Pages → 'Mega Menu Code', 'Footer Code', 'Global CSS Code' (Drafts)")
+    print(" 2. Code copy karein → Appearance → Widgets → Custom HTML me paste karein")
+    print(" 3. Menu/Footer ab har page par flawlessly show honge!")
     print("=" * 60)
-
 # ==============================================================================
 # 🚀 SCRIPT ENTRY POINT
 # ==============================================================================
