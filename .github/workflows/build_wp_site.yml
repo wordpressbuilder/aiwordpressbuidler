@@ -1,161 +1,162 @@
-name: Generate WordPress Website
+name: Build WordPress Site
 
 on:
   workflow_dispatch:
     inputs:
-      business_name:
-        default: ''
-      industry:
-        default: ''
-      city:
-        default: ''
-      country:
-        default: 'UAE'
-      phone:
-        default: ''
       wordpress_url:
-        description: 'WP site URL e.g. https://client-site.com/'
-        default: ''
+        description: 'WordPress site URL'
+        required: true
       wordpress_user:
-        description: 'WP username (App Password GitHub Secret me hai)'
-        default: 'admin'
+        description: 'WordPress username'
+        required: true
+      wordpress_app_pass:
+        description: 'WordPress Application Password (per-client)'
+        required: true
+      business_name:
+        description: 'Business name'
+        required: true
+      industry:
+        description: 'Industry'
+        required: true
+      city:
+        description: 'City'
+        required: true
+      country:
+        description: 'Country'
+        required: false
+        default: 'UAE'
+      state:
+        description: 'State / Region'
+        required: false
+        default: ''
+      phone:
+        description: 'Phone'
+        required: false
+        default: ''
       mode:
-        description: '1=Content Injector | 2=Hub Mode | 3=Full Website'
+        description: 'Mode (1/2/3)'
+        required: true
         default: '3'
       language:
-        description: 'en / ar / es / fr / de'
+        description: 'Language'
+        required: false
         default: 'en'
       target_page_id:
-        description: 'Mode 1 only — existing WP Page ID'
-        default: ''
-      hub_page_id:
-        description: 'Mode 2 only — parent WP Page ID'
+        description: 'Mode 1: target page ID'
+        required: false
         default: ''
       main_service:
+        description: 'Mode 1: main service'
+        required: false
+        default: ''
+      hub_page_id:
+        description: 'Mode 2: hub page ID'
+        required: false
         default: ''
       sub_services:
+        description: 'Mode 2: services (comma separated)'
+        required: false
         default: ''
       services_mode3:
+        description: 'Mode 3: services (comma separated)'
+        required: false
         default: ''
       image_model:
-        description: '1=Hybrid | 2=All OpenAI | 3=All Replicate'
+        description: 'Image model (1=hybrid, 2=gpt)'
+        required: false
         default: '1'
       backlinks:
+        description: 'Dev.to backlinks (yes/no)'
+        required: false
         default: 'no'
       internal_links:
+        description: 'Internal links (yes/no)'
+        required: false
         default: 'yes'
       facebook:
+        required: false
         default: '#'
       instagram:
+        required: false
         default: '#'
       twitter:
+        required: false
         default: '#'
       linkedin:
+        required: false
         default: '#'
       youtube:
+        required: false
         default: '#'
 
 jobs:
-  build-wp-site:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    - name: Setup Python 3.11
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Cache pip
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-        restore-keys: ${{ runner.os }}-pip-
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Install dependencies
-      run: pip install -r requirements.txt
+      - name: Write config.json
+        run: |
+          cat > config.json << 'EOF'
+          {
+            "wordpress_url": "${{ github.event.inputs.wordpress_url }}",
+            "wordpress_user": "${{ github.event.inputs.wordpress_user }}",
+            "wordpress_app_password": "${{ github.event.inputs.wordpress_app_pass }}",
+            "business_name": "${{ github.event.inputs.business_name }}",
+            "industry": "${{ github.event.inputs.industry }}",
+            "city": "${{ github.event.inputs.city }}",
+            "country": "${{ github.event.inputs.country }}",
+            "state": "${{ github.event.inputs.state }}",
+            "phone": "${{ github.event.inputs.phone }}",
+            "mode": "${{ github.event.inputs.mode }}",
+            "language": "${{ github.event.inputs.language }}",
+            "target_page_id": "${{ github.event.inputs.target_page_id }}",
+            "main_service": "${{ github.event.inputs.main_service }}",
+            "hub_page_id": "${{ github.event.inputs.hub_page_id }}",
+            "sub_services": "${{ github.event.inputs.sub_services }}",
+            "services_mode3": "${{ github.event.inputs.services_mode3 }}",
+            "image_model": "${{ github.event.inputs.image_model }}",
+            "backlinks": "${{ github.event.inputs.backlinks }}",
+            "internal_links": "${{ github.event.inputs.internal_links }}",
+            "facebook": "${{ github.event.inputs.facebook }}",
+            "instagram": "${{ github.event.inputs.instagram }}",
+            "twitter": "${{ github.event.inputs.twitter }}",
+            "linkedin": "${{ github.event.inputs.linkedin }}",
+            "youtube": "${{ github.event.inputs.youtube }}"
+          }
+          EOF
+          echo "config.json written (contents hidden — contains credentials)"
 
-    - name: Build config.json from form inputs
-      env:
-        IN_BUSINESS_NAME:  ${{ github.event.inputs.business_name }}
-        IN_INDUSTRY:       ${{ github.event.inputs.industry }}
-        IN_CITY:           ${{ github.event.inputs.city }}
-        IN_COUNTRY:        ${{ github.event.inputs.country }}
-        IN_PHONE:          ${{ github.event.inputs.phone }}
-        IN_WP_URL:         ${{ github.event.inputs.wordpress_url }}
-        IN_WP_USER:        ${{ github.event.inputs.wordpress_user }}
-        IN_MODE:           ${{ github.event.inputs.mode }}
-        IN_LANGUAGE:       ${{ github.event.inputs.language }}
-        IN_TARGET_PAGE:    ${{ github.event.inputs.target_page_id }}
-        IN_HUB_PAGE:       ${{ github.event.inputs.hub_page_id }}
-        IN_MAIN_SERVICE:   ${{ github.event.inputs.main_service }}
-        IN_SUB_SERVICES:   ${{ github.event.inputs.sub_services }}
-        IN_SERVICES_MODE3: ${{ github.event.inputs.services_mode3 }}
-        IN_IMAGE_MODEL:    ${{ github.event.inputs.image_model }}
-        IN_BACKLINKS:      ${{ github.event.inputs.backlinks }}
-        IN_INTERNAL_LINKS: ${{ github.event.inputs.internal_links }}
-        IN_FACEBOOK:       ${{ github.event.inputs.facebook }}
-        IN_INSTAGRAM:      ${{ github.event.inputs.instagram }}
-        IN_TWITTER:        ${{ github.event.inputs.twitter }}
-        IN_LINKEDIN:       ${{ github.event.inputs.linkedin }}
-        IN_YOUTUBE:        ${{ github.event.inputs.youtube }}
-      run: |
-        python3 - <<'PYEOF'
-        import json, os
+      - name: Run WordPress generator
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+          GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
+        run: python main.py
 
-        g = lambda k, d='': (os.environ.get(k) or d).strip() or d
-
-        cfg = {
-          "business_name":  g('IN_BUSINESS_NAME'),
-          "industry":       g('IN_INDUSTRY'),
-          "city":           g('IN_CITY'),
-          "country":        g('IN_COUNTRY', 'UAE'),
-          "phone":          g('IN_PHONE'),
-          "wordpress_url":  g('IN_WP_URL'),
-          "wordpress_user": g('IN_WP_USER', 'admin'),
-          "mode":           g('IN_MODE', '3'),
-          "language":       g('IN_LANGUAGE', 'en'),
-          "target_page_id": g('IN_TARGET_PAGE'),
-          "hub_page_id":    g('IN_HUB_PAGE'),
-          "main_service":   g('IN_MAIN_SERVICE'),
-          "sub_services":   g('IN_SUB_SERVICES'),
-          "services_mode3": g('IN_SERVICES_MODE3'),
-          "image_model":    g('IN_IMAGE_MODEL', '1'),
-          "backlinks":      g('IN_BACKLINKS', 'no'),
-          "internal_links": g('IN_INTERNAL_LINKS', 'yes'),
-          "facebook":       g('IN_FACEBOOK', '#'),
-          "instagram":      g('IN_INSTAGRAM', '#'),
-          "twitter":        g('IN_TWITTER', '#'),
-          "linkedin":       g('IN_LINKEDIN', '#'),
-          "youtube":        g('IN_YOUTUBE', '#')
-        }
-
-        with open("config.json", "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-
-        print(f"✅ Config: {cfg['business_name']} | {cfg['city']} | Mode {cfg['mode']} | Lang {cfg['language']}")
-        print(f"   WP Target: {cfg['wordpress_url']}")
-        PYEOF
-
-    - name: Run WordPress generator
-      env:
-        OPENAI_API_KEY:         ${{ secrets.OPENAI_API_KEY }}
-        ANTHROPIC_API_KEY:      ${{ secrets.ANTHROPIC_API_KEY }}
-        REPLICATE_API_TOKEN:    ${{ secrets.REPLICATE_API_TOKEN }}
-        CLOUDINARY_CLOUD_NAME:  ${{ secrets.CLOUDINARY_CLOUD_NAME }}
-        CLOUDINARY_API_KEY:     ${{ secrets.CLOUDINARY_API_KEY }}
-        CLOUDINARY_API_SECRET:  ${{ secrets.CLOUDINARY_API_SECRET }}
-        DEVTO_API_KEY:          ${{ secrets.DEVTO_API_KEY }}
-        WP_APP_PASSWORD:        ${{ secrets.WP_APP_PASSWORD }}
-      run: python main.py
-
-    - name: Summary
-      if: always()
-      run: |
-        echo "=== WordPress publish run complete ==="
-        echo "Check WP Admin → Pages for published content"
-        echo "Mega Menu / Footer / CSS draft pages bhi check karein"
+      - name: Upload run log (always, for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-build-log-${{ github.run_id }}
+          path: |
+            *.log
+          if-no-files-found: ignore
+          retention-days: 14
