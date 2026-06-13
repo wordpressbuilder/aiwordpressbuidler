@@ -7,8 +7,7 @@ import replicate
 from niche_engine import (
     NicheEngine, classify_niche, generate_dynamic_profile, get_page_variant,
     _get_business_tokens, _hue_shift, get_section_order,
-    NICHE_PROFILES, NICHE_MAP, get_section_bg, niche_font_import, BG_COLORS,
-    get_card_variant
+    NICHE_PROFILES, NICHE_MAP, get_section_bg, niche_font_import, BG_COLORS
 )
 from mode1_landing_engine import build_mode1_landing_page
 import anthropic
