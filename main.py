@@ -494,11 +494,73 @@ LAST_REPLICATE_REQUEST = 0
 # ==============================================================================
 # 🎨 LOGO GENERATION
 # ==============================================================================
+def process_logo_image(raw_bytes, zoom_percent=10, pad_percent=6):
+    """
+    AUTO-ZOOM LOGO PROCESSOR: AI logo generators leave huge white margins around
+    the mark. This trims to the logo's actual bounding box, optionally crops a
+    little tighter (zoom_percent), then adds a small uniform pad — so the logo
+    fills the frame instead of floating in empty space. Lossless PNG output.
+    Returns processed bytes, or the original bytes if anything goes wrong.
+    """
+    try:
+        from PIL import Image, ImageChops
+        from io import BytesIO
+
+        img = Image.open(BytesIO(raw_bytes))
+
+        # Flatten any transparency onto white before bbox detection
+        if img.mode in ("RGBA", "LA", "P"):
+            base = Image.new("RGB", img.size, (255, 255, 255))
+            rgba = img.convert("RGBA")
+            base.paste(rgba, mask=rgba.split()[-1])
+            img = base
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        # 1. Find bounding box of non-white content
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        diff = ImageChops.difference(img, bg)
+        bbox = diff.getbbox()
+
+        if bbox:
+            x0, y0, x1, y1 = bbox
+            w, h = x1 - x0, y1 - y0
+
+            # 2. Extra zoom: shrink the crop box inward (zoom_percent total, split both sides)
+            zx = int(w * (zoom_percent / 200))
+            zy = int(h * (zoom_percent / 200))
+            nx0, ny0, nx1, ny1 = x0 + zx, y0 + zy, x1 - zx, y1 - zy
+            if nx1 <= nx0 or ny1 <= ny0:  # safety: don't invert the box
+                nx0, ny0, nx1, ny1 = x0, y0, x1, y1
+
+            cropped = img.crop((nx0, ny0, nx1, ny1))
+
+            # 3. Small uniform padding so the mark doesn't touch the edges
+            w, h = cropped.size
+            pad = int(max(w, h) * (pad_percent / 100))
+            canvas = Image.new("RGB", (w + pad * 2, h + pad * 2), (255, 255, 255))
+            canvas.paste(cropped, (pad, pad))
+            img = canvas
+
+        out_buffer = BytesIO()
+        img.save(out_buffer, format="PNG", optimize=True)
+        out_buffer.seek(0)
+        return out_buffer.getvalue()
+
+    except Exception as e:
+        print(f"   ⚠️ Logo zoom processing failed, using original: {e}")
+        return raw_bytes
+
+
 @retry_operation(max_retries=2)
 def generate_logo(b_data, output_folder=""):
     """
     ADVANCED AI LOGO GENERATOR: Dynamically injects brand colors and uses 
     premium vector-style prompting for flawless, responsive desktop/mobile logos.
+    💎 WP MEDIA LIBRARY FIRST: uploads as lightweight WebP with SEO alt/title tags.
+    💎 AUTO-ZOOM: trims the AI's default whitespace margins so the logo mark
+    fills the frame (no more tiny logo floating in a sea of white).
+    Cloudinary is now ONLY a fallback if the WP upload fails.
     """
     logo_url = ""
     business_name = b_data.get('name', 'Company')
@@ -516,7 +578,62 @@ def generate_logo(b_data, output_folder=""):
         f"Background: Pure solid white background. "
         f"CRITICAL: No 3D effects, no shadows, no physical mockups (do not put the logo on a wall or paper), no gradients. "
         f"The logo must be perfectly centered and clearly legible."
-        ) # <--- ADDED MISSING PARENTHESIS
+    )
+
+    alt_text = f"{business_name} - {clean_title(industry)} Logo"
+    filename_hint = f"logo-{business_name}"
+
+    def _finalize_logo(raw_b64_or_url):
+        """Auto-zoom the logo, then WP Media Library first, Cloudinary as fallback."""
+        try:
+            if raw_b64_or_url.startswith("data:image"):
+                raw_bytes = base64.b64decode(raw_b64_or_url.split(",", 1)[1])
+            else:
+                raw_bytes = requests.get(raw_b64_or_url, timeout=30).content
+
+            processed_bytes = process_logo_image(raw_bytes, zoom_percent=10, pad_percent=6)
+            processed_data_uri = f"data:image/png;base64,{base64.b64encode(processed_bytes).decode()}"
+        except Exception as e:
+            print(f"   ⚠️ Logo post-processing failed, using original: {e}")
+            processed_data_uri = raw_b64_or_url
+
+        # 1️⃣ WP Media Library — PRIMARY (lightweight WebP + SEO alt/title)
+        wp_url = upload_image_to_wp_media(
+            processed_data_uri,
+            alt_text=alt_text,
+            filename_hint=filename_hint,
+            quality=90,
+            max_width=600,
+            output_format="webp"
+        )
+        if wp_url:
+            print(f"   ✅ Logo uploaded to WP Media Library: {wp_url[:60]}...")
+            return wp_url
+
+        # 2️⃣ Cloudinary — FALLBACK ONLY (if WP upload failed)
+        if CLIENTS.get('cloudinary'):
+            try:
+                res = cloudinary.uploader.upload(
+                    processed_data_uri,
+                    folder="static_website/logos",
+                    public_id=f"logo_{slugify(business_name)}_{int(time.time())}",
+                    quality=90,
+                    format="png",
+                    transformation=[
+                        {"width": 600, "crop": "limit"},
+                        {"quality": "auto:best"},
+                        {"fetch_format": "auto"}
+                    ]
+                )
+                cl_url = res.get('secure_url')
+                if cl_url:
+                    print(f"   ⚠️ WP upload failed — using Cloudinary fallback: {cl_url[:60]}...")
+                    return cl_url
+            except Exception as e:
+                print(f"   ⚠️ Cloudinary fallback also failed: {e}")
+
+        return None
+
     if CLIENTS.get('openai'):
         try:
             print(f"   🎨 Generating PRO Logo with GPT-Image-2...")
@@ -536,29 +653,17 @@ def generate_logo(b_data, output_folder=""):
                 else:
                     image_url = response.data[0].url
                 
-                if image_url and CLIENTS.get('cloudinary'):
-                    # Standardized responsive cropping for Desktop and Mobile compatibility
-                    res = cloudinary.uploader.upload(
-                        image_url,
-                        folder="static_website/logos",
-                        public_id=f"logo_{slugify(business_name)}_{int(time.time())}",
-                        quality=90,
-                        format="png",
-                        transformation=[
-                            {"width": 600, "crop": "limit"}, # Perfect max-width for retina displays
-                            {"quality": "auto:best"},
-                            {"fetch_format": "auto"}
-                        ]
-                    )
-                    logo_url = res.get('secure_url', image_url)
-                    print(f"   ✅ PRO Logo generated with GPT-Image-2: {logo_url[:50]}...")
-                    return logo_url
+                if image_url:
+                    final_url = _finalize_logo(image_url)
+                    if final_url:
+                        print(f"   ✅ PRO Logo generated with GPT-Image-2: {final_url[:50]}...")
+                        return final_url
                     
         except Exception as e:
             print(f"   ⚠️ DALL-E 3 logo generation failed: {e}")
     
     # Fallback to Replicate if GPT fails, using the same master prompt
-    if not logo_url and CLIENTS.get('replicate') and CLIENTS.get('cloudinary'):
+    if not logo_url and CLIENTS.get('replicate'):
         try:
             print(f"   🎨 Attempting PRO Logo generation with Replicate FLUX...")
             
@@ -588,21 +693,10 @@ def generate_logo(b_data, output_folder=""):
                     image_url = output
             
             if image_url:
-                res = cloudinary.uploader.upload(
-                    image_url,
-                    folder="static_website/logos",
-                    public_id=f"logo_{slugify(business_name)}_{int(time.time())}",
-                    quality=90,
-                    format="png",
-                    transformation=[
-                        {"width": 600, "crop": "limit"},
-                        {"quality": "auto:best"},
-                        {"fetch_format": "auto"}
-                    ]
-                )
-                logo_url = res.get('secure_url', image_url)
-                print(f"   ✅ PRO Logo generated with Replicate: {logo_url[:50]}...")
-                return logo_url
+                final_url = _finalize_logo(image_url)
+                if final_url:
+                    print(f"   ✅ PRO Logo generated with Replicate: {final_url[:50]}...")
+                    return final_url
                 
         except Exception as e:
             print(f"   ⚠️ Replicate logo generation failed: {e}")
@@ -782,11 +876,13 @@ def get_composition_and_culture(target_lang="en", context_mode="hero"):
 # ==============================================================================
 # 🖼️ WORDPRESS MEDIA LIBRARY UPLOADER (Cloudinary replacement + compression)
 # ==============================================================================
-def upload_image_to_wp_media(image_url_or_data, alt_text="", filename_hint="image", quality=82, max_width=1600):
+def upload_image_to_wp_media(image_url_or_data, alt_text="", filename_hint="image", quality=82, max_width=1600, output_format="webp"):
     """
-    Downloads/decodes an image (URL or base64 data-uri), compresses it with PIL
-    (matches old image_localizer.py behavior — JPEG quality + max-width resize),
+    Downloads/decodes an image (URL or base64 data-uri), compresses it with PIL,
     then uploads to WordPress Media Library via REST API.
+    💎 WEBP-FIRST: ~25-35% smaller than JPEG at the same visual quality → faster site,
+    same crisp look. Auto-falls back to JPEG if the site rejects WebP uploads
+    (some older WP installs / security plugins restrict mime types).
     Returns the WP-hosted attachment URL (or None on failure).
     """
     try:
@@ -802,7 +898,7 @@ def upload_image_to_wp_media(image_url_or_data, alt_text="", filename_hint="imag
             resp.raise_for_status()
             raw_bytes = resp.content
 
-        # 2. Open + resize + compress with PIL (mirrors image_localizer.py quality=82)
+        # 2. Open + resize with PIL
         img = Image.open(BytesIO(raw_bytes))
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
@@ -812,33 +908,52 @@ def upload_image_to_wp_media(image_url_or_data, alt_text="", filename_hint="imag
             new_size = (max_width, int(img.height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        out_buffer = BytesIO()
-        img.save(out_buffer, format="JPEG", quality=quality, optimize=True)
-        out_buffer.seek(0)
-        compressed_bytes = out_buffer.getvalue()
-        print(f"   📉 Image compressed: {len(raw_bytes)//1024}KB → {len(compressed_bytes)//1024}KB")
+        def _encode(fmt):
+            buf = BytesIO()
+            if fmt == "webp":
+                img.save(buf, format="WEBP", quality=quality, method=6)
+            else:
+                img.save(buf, format="JPEG", quality=quality, optimize=True)
+            buf.seek(0)
+            return buf.getvalue()
 
-        # 3. SEO-friendly filename (mirrors image_localizer.py _make_filename / _slug)
+        fmt = output_format if output_format in ("webp", "jpeg") else "webp"
+        compressed_bytes = _encode(fmt)
+        print(f"   📉 Image compressed ({fmt.upper()}): {len(raw_bytes)//1024}KB → {len(compressed_bytes)//1024}KB")
+
+        # 3. SEO-friendly filename
         safe_name = slugify(filename_hint)[:60] or "image"
-        filename = f"{safe_name}-{int(time.time())}-{random.randint(100,999)}.jpg"
+        ext = "webp" if fmt == "webp" else "jpg"
+        mime = "image/webp" if fmt == "webp" else "image/jpeg"
+        filename = f"{safe_name}-{int(time.time())}-{random.randint(100,999)}.{ext}"
 
         # 4. Upload to WP Media Library
         auth = base64.b64encode(f"{Config.WP_USER}:{Config.WP_APP_PASSWORD}".encode()).decode('utf-8')
         headers = {
             "Authorization": f"Basic {auth}",
             "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Type": "image/jpeg",
+            "Content-Type": mime,
             "User-Agent": "Mozilla/5.0"
         }
         media_url = f"{Config.WP_URL.rstrip('/')}/wp-json/wp/v2/media"
         response = requests.post(media_url, headers=headers, data=compressed_bytes, verify=False, timeout=60)
+
+        # 💎 WebP rejected by this WP install? Retry once as JPEG.
+        if response.status_code != 201 and fmt == "webp":
+            print(f"   ⚠️ WebP upload rejected ({response.status_code}) — retrying as JPEG...")
+            fmt = "jpeg"
+            compressed_bytes = _encode(fmt)
+            filename = f"{safe_name}-{int(time.time())}-{random.randint(100,999)}.jpg"
+            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            headers["Content-Type"] = "image/jpeg"
+            response = requests.post(media_url, headers=headers, data=compressed_bytes, verify=False, timeout=60)
 
         if response.status_code == 201:
             media_data = response.json()
             attachment_id = media_data['id']
             source_url = media_data['source_url']
 
-            # 5. Set ALT text for SEO (separate PATCH call)
+            # 5. Set ALT text + Title for SEO
             if alt_text:
                 patch_headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/json"}
                 requests.patch(
@@ -1270,10 +1385,10 @@ class UniversalHeader:
         is_font_awesome = logo_url.startswith('fas ') or logo_url.startswith('fa-')
         
         if is_font_awesome:
-            logo_content = f'<i class="{logo_url}" style="font-size:32px; color:#{accent_color};"></i>'
+            logo_content = f'<i class="{logo_url}" style="font-size:35px; color:#{accent_color};"></i>'
             logo_text = f'<span style="font-family:Outfit,sans-serif; font-size:1.3rem; font-weight:700; color:#{primary_color}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px;">{b_data.get("name", "")}</span>'
         elif logo_url:
-            logo_content = f'<img src="{logo_url}" alt="{b_data.get("name", "")} Logo" style="max-width:180px; max-height:60px;">'
+            logo_content = f'<img src="{logo_url}" alt="{b_data.get("name", "")} Logo" style="max-width:200px; max-height:66px; width:auto; height:auto; object-fit:contain;">'
             logo_text = ""
         else:
             logo_content = ""
